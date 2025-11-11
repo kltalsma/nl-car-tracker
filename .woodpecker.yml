@@ -21,16 +21,17 @@ steps:
       - pip install -r requirements.txt
       
       # Run tests
-      - echo Running RDW lookup test...
-      - python test_rdw_lookup.py || echo RDW test completed with status 0
+      - echo "Running RDW lookup test..."
+      - python test_rdw_lookup.py || echo "RDW test completed with status $?"
       
-      - echo Running Vandenbrug scraper test...
-      - python test_vandenbrug.py || echo Vandenbrug test completed with status 0
+      - echo "Running Vandenbrug scraper test..."
+      - python test_vandenbrug.py || echo "Vandenbrug test completed with status $?"
       
       # Run pytest if any test files exist
-      - if [ -d tests ] || ls test_*.py 2>/dev/null | grep -q .; then
-          echo Running pytest...;
-          pytest -v || echo Pytest completed with status 0;
+      - |
+        if [ -d "tests" ] || ls test_*.py 2>/dev/null | grep -q .; then
+          echo "Running pytest..."
+          pytest -v || echo "Pytest completed with status $?"
         fi
 
   # Build Docker images (optional - only on main branch)
@@ -42,10 +43,10 @@ steps:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     commands:
-      - echo Building Docker image...
-      - docker build -t nl-car-tracker: .
-      - docker tag nl-car-tracker: nl-car-tracker:latest
-      - echo Docker image built successfully
+      - echo "Building Docker image..."
+      - docker build -t nl-car-tracker:${CI_COMMIT_SHA:0:8} .
+      - docker tag nl-car-tracker:${CI_COMMIT_SHA:0:8} nl-car-tracker:latest
+      - echo "Docker image built successfully"
       - docker images | grep nl-car-tracker
 
   # Lint and code quality checks (optional)
@@ -53,7 +54,7 @@ steps:
     image: python:3.11-slim
     commands:
       - pip install flake8 black
-      - echo Running flake8...
+      - echo "Running flake8..."
       - flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
-      - echo Checking code formatting with black...
-      - black --check . || echo Code formatting check completed
+      - echo "Checking code formatting with black..."
+      - black --check . || echo "Code formatting check completed"
