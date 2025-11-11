@@ -3,7 +3,7 @@
 
 # Run on all events by default - filter per-step as needed
 when:
-  - event: [push, pull_request, manual]
+  - event: [pull_request, manual]
 
 steps:
   # Install dependencies and run tests (runs on all branches)
@@ -37,7 +37,7 @@ steps:
     image: docker:24-dind
     privileged: true
     when:
-      - event: push
+      - event: pull_request
         branch: [main, feature/*]
       - event: manual
     volumes:
