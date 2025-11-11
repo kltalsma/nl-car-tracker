@@ -37,6 +37,7 @@ steps:
   # Build Docker images (optional - only on main branch)
   build-docker:
     image: docker:24-dind
+    privileged: true
     when:
       branch: main
       event: push
