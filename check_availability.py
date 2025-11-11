@@ -17,6 +17,8 @@ Examples:
 
 import argparse
 import sys
+import json
+import os
 from pathlib import Path
 from datetime import datetime, timedelta
 import time
@@ -93,6 +95,14 @@ class AvailabilityChecker:
             'reserved',      # Reserved
             'gereserveerd',  # Dutch: reserved
         ]
+        
+        # Cookie files for each website
+        self.cookies_files = {
+            'autotrack.nl': 'cookies/autotrack_cookies.json'
+        }
+        
+        # Track which websites have had cookies loaded
+        self.cookies_loaded = set()
     
     def _init_driver(self):
         """Initialize Selenium WebDriver"""
@@ -116,6 +126,63 @@ class AvailabilityChecker:
             self.driver.quit()
             self.driver = None
             logger.info("WebDriver closed")
+    
+    def load_cookies(self, website):
+        """Load cookies from file to bypass privacy gates
+        
+        Args:
+            website: Website domain (e.g., 'autotrack.nl')
+            
+        Returns:
+            bool: True if cookies loaded successfully, False otherwise
+        """
+        if website in self.cookies_loaded:
+            logger.debug(f"Cookies already loaded for {website}")
+            return True
+            
+        if website not in self.cookies_files:
+            logger.debug(f"No cookie file configured for {website}")
+            return False
+            
+        cookies_file = self.cookies_files[website]
+        if not os.path.exists(cookies_file):
+            logger.warning(f"Cookie file not found: {cookies_file}")
+            return False
+        
+        try:
+            # Navigate to robots.txt first to avoid privacy gate redirect
+            # This gets us on the correct domain without triggering redirects
+            robots_url = f"https://www.{website}/robots.txt"
+            logger.info(f"Loading cookies for {website}...")
+            self.driver.get(robots_url)
+            time.sleep(2)
+            
+            # Load cookies from file
+            with open(cookies_file, 'r') as f:
+                cookies = json.load(f)
+            
+            # Add each cookie to the browser
+            successful_cookies = 0
+            for cookie in cookies:
+                try:
+                    # Remove fields that Selenium doesn't accept
+                    if 'sameSite' in cookie:
+                        del cookie['sameSite']
+                    if 'storeId' in cookie:
+                        del cookie['storeId']
+                    
+                    self.driver.add_cookie(cookie)
+                    successful_cookies += 1
+                except Exception as e:
+                    logger.debug(f"Could not add cookie {cookie.get('name')}: {e}")
+            
+            logger.info(f"Loaded {successful_cookies}/{len(cookies)} cookies for {website}")
+            self.cookies_loaded.add(website)
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error loading cookies for {website}: {e}")
+            return False
     
     def _detect_banner_text_in_images(self):
         """
@@ -241,12 +308,48 @@ class AvailabilityChecker:
             # Check HTTP status (if we got redirected or error page)
             current_url = self.driver.current_url
             if current_url != car.listing_url:
-                # Got redirected - likely not available
-                if recheck_mode:
-                    logger.info(f"  ❌ STILL UNAVAILABLE: Redirected from {car.listing_url} to {current_url}")
-                else:
-                    logger.info(f"  ❌ UNAVAILABLE: Redirected from {car.listing_url} to {current_url}")
-                return (False, 'http_error')
+                # Check if this is a privacy gate redirect (not an unavailability indicator)
+                is_privacy_gate = 'myprivacy.dpgmedia.nl' in current_url or 'privacygate' in current_url.lower()
+                
+                if is_privacy_gate:
+                    # This is a privacy/consent page, not an unavailability indicator
+                    logger.info(f"  🔒 Privacy gate detected, loading cookies and retrying...")
+                    
+                    # Extract website domain from original URL
+                    from urllib.parse import urlparse
+                    parsed_url = urlparse(car.listing_url)
+                    website = parsed_url.netloc.replace('www.', '')
+                    
+                    # Try loading cookies and retrying
+                    if self.load_cookies(website):
+                        logger.info(f"  🔄 Retrying with cookies loaded...")
+                        self.driver.get(car.listing_url)
+                        time.sleep(3)
+                        
+                        # Check the new URL after retry
+                        retry_url = self.driver.current_url
+                        if retry_url == car.listing_url:
+                            logger.info(f"  ✅ Successfully bypassed privacy gate")
+                            # Continue with normal availability checks below
+                            current_url = retry_url
+                        else:
+                            # Still redirected after loading cookies - now it's really unavailable
+                            if recheck_mode:
+                                logger.info(f"  ❌ STILL UNAVAILABLE: Redirected even after loading cookies to {retry_url}")
+                            else:
+                                logger.info(f"  ❌ UNAVAILABLE: Redirected even after loading cookies to {retry_url}")
+                            return (False, 'http_error')
+                    else:
+                        logger.warning(f"  ⚠️  Could not load cookies, treating as unavailable")
+                        return (False, 'http_error')
+                
+                # Not a privacy gate - this is a real redirect indicating unavailability
+                if current_url != car.listing_url:
+                    if recheck_mode:
+                        logger.info(f"  ❌ STILL UNAVAILABLE: Redirected from {car.listing_url} to {current_url}")
+                    else:
+                        logger.info(f"  ❌ UNAVAILABLE: Redirected from {car.listing_url} to {current_url}")
+                    return (False, 'http_error')
             
             # If we got here, car appears available
             if recheck_mode:
