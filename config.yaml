@@ -365,7 +365,7 @@ notifications:
     min_score_for_notification: 85
 availability_checker:
   enabled: true
-  check_interval_hours: 0.26666666666666666
+  check_interval_hours: 0.25
   check_stale_cars_days: 1
   scrape_alternatives: true
   notify_on_preferred_unavailable: true
