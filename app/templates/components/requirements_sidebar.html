@@ -1,0 +1,107 @@
+{% macro render_requirements(config, user_reqs=None, layout='sidebar') %}
+{# 
+    Reusable component for displaying user requirements
+    
+    Parameters:
+    - config: The config object containing critical_features and nice_to_have_features
+    - user_reqs: Optional user requirements object with min_price, max_price, min_year, max_mileage_priority, max_mileage_acceptable
+    - layout: 'sidebar' for compact side panel or 'card' for full-width card (default: 'sidebar')
+#}
+
+{% if layout == 'card' %}
+<!-- Card Layout (for top_matches.html) -->
+<div class="card mb-3 border-primary">
+    <div class="card-header bg-primary text-white">
+        <h5 class="mb-0"><i class="bi bi-list-check"></i> Your Requirements</h5>
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-4">
+                <h6><i class="bi bi-exclamation-circle-fill text-danger"></i> Critical Features ({{ config.critical_features|length }})</h6>
+                <ul class="list-unstyled mb-3">
+                    {% for feature in config.critical_features %}
+                    <li><i class="bi bi-check-circle-fill text-success"></i> {{ feature }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div class="col-md-4">
+                <h6><i class="bi bi-heart-fill text-info"></i> Nice to Have ({{ config.nice_to_have_features|length }})</h6>
+                <ul class="list-unstyled mb-3">
+                    {% for feature in config.nice_to_have_features %}
+                    <li><i class="bi bi-circle"></i> {{ feature }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div class="col-md-4">
+                <h6><i class="bi bi-funnel-fill text-primary"></i> Filters</h6>
+                <ul class="list-unstyled mb-0">
+                    {% if user_reqs %}
+                    <li><strong>Price:</strong> €{{ "{:,}".format(user_reqs.min_price) }} - €{{ "{:,}".format(user_reqs.max_price) }}</li>
+                    <li><strong>Year:</strong> {{ user_reqs.min_year }}+</li>
+                    <li><strong>Mileage:</strong> &lt;{{ "{:,}".format(user_reqs.max_mileage_priority) }} km (priority), &lt;{{ "{:,}".format(user_reqs.max_mileage_acceptable) }} km (acceptable)</li>
+                    {% else %}
+                    <li><i class="bi bi-door-closed"></i> <strong>Doors:</strong> 5 or more</li>
+                    <li><i class="bi bi-people"></i> <strong>Seats:</strong> 5 or more</li>
+                    <li><i class="bi bi-fuel-pump"></i> <strong>Fuel:</strong> Full Electric, PHEV/Hybrid</li>
+                    {% endif %}
+                    <li><strong>Transmission:</strong> Automatic</li>
+                </ul>
+                
+                <h6 class="mt-3"><i class="bi bi-star-fill text-warning"></i> Preferred Models</h6>
+                <ul class="list-unstyled mb-0 small">
+                    <li>Skoda Enyaq / Kodiaq</li>
+                    <li>Audi e-tron / Q4 e-tron</li>
+                    <li>Kia EV5 / EV6 / EV9</li>
+                    <li>BMW iX3</li>
+                    <li>Hyundai Tucson</li>
+                    <li>Stationwagons with 100km+ range</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+<!-- Sidebar Layout (for my_matches.html) -->
+<div class="requirement-box">
+    <h5><i class="bi bi-clipboard-check"></i> Your Requirements</h5>
+    
+    <h6 class="mt-3 text-danger"><i class="bi bi-exclamation-triangle-fill"></i> CRITICAL FEATURES ({{ config.critical_features|length }})</h6>
+    <ul class="list-unstyled ms-2 small">
+        {% for feature in config.critical_features %}
+        <li><i class="bi bi-check-circle-fill text-danger"></i> {{ feature }}</li>
+        {% endfor %}
+    </ul>
+    
+    <h6 class="mt-3"><i class="bi bi-heart-fill"></i> NICE TO HAVE ({{ config.nice_to_have_features|length }})</h6>
+    <ul class="list-unstyled ms-2 small">
+        {% for feature in config.nice_to_have_features %}
+        <li><i class="bi bi-circle"></i> {{ feature }}</li>
+        {% endfor %}
+    </ul>
+    
+    <h6 class="mt-3"><i class="bi bi-funnel-fill"></i> FILTERS</h6>
+    <ul class="list-unstyled ms-2 small">
+        {% if user_reqs %}
+        <li><strong>Price Range:</strong> €{{ "{:,}".format(user_reqs.min_price) }} - €{{ "{:,}".format(user_reqs.max_price) }}</li>
+        <li><strong>Year:</strong> {{ user_reqs.min_year }}+</li>
+        <li><strong>Mileage:</strong> &lt;{{ "{:,}".format(user_reqs.max_mileage_priority) }} km (priority), &lt;{{ "{:,}".format(user_reqs.max_mileage_acceptable) }} km (acceptable)</li>
+        {% else %}
+        <li><strong>Doors:</strong> 5 or more</li>
+        <li><strong>Seats:</strong> 5 or more</li>
+        <li><strong>Fuel Types:</strong> Full Electric, PHEV/Hybrid</li>
+        {% endif %}
+        <li><strong>Transmission:</strong> Automatic</li>
+    </ul>
+    
+    <h6 class="mt-3"><i class="bi bi-star-fill"></i> PREFERRED</h6>
+    <ul class="list-unstyled ms-2 small">
+        <li>Skoda Enyaq / Kodiaq</li>
+        <li>Audi e-tron / Q4 e-tron</li>
+        <li>Kia EV5 / EV6 / EV9</li>
+        <li>BMW iX3</li>
+        <li>Hyundai Tucson</li>
+        <li>Stationwagons with 100km+ range</li>
+    </ul>
+</div>
+{% endif %}
+{% endmacro %}

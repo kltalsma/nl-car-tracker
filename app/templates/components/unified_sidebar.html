@@ -1,0 +1,243 @@
+{% macro render_sidebar(config, user_reqs=None, stats=None, available_makes=None, available_models=None, request_args=None, trade_in_value=None, show_filters=True) %}
+{#
+    Unified sidebar component for all main pages (home, my_matches, top_matches)
+    
+    Parameters:
+    - config: The config object containing critical_features and nice_to_have_features
+    - user_reqs: Optional user requirements object
+    - stats: Optional statistics dict (total_cars, perfect_matches, avg_price)
+    - available_makes: List of available car makes for filter dropdown
+    - available_models: List of available car models for filter dropdown
+    - request_args: Request arguments for preserving filter state
+    - trade_in_value: Current car trade-in value
+    - show_filters: Whether to show the filter section (default: True)
+#}
+
+<!-- Requirements Display -->
+<div class="sidebar">
+    <h5><i class="bi bi-clipboard-check"></i> Your Requirements</h5>
+    
+    <h6 class="mt-3 text-danger"><i class="bi bi-exclamation-triangle-fill"></i> CRITICAL FEATURES ({{ config.critical_features|length }})</h6>
+    <ul class="list-unstyled ms-2 small">
+        {% for feature in config.critical_features %}
+        <li><i class="bi bi-check-circle-fill text-danger"></i> {{ feature }}</li>
+        {% endfor %}
+    </ul>
+    
+    <h6 class="mt-3 text-info"><i class="bi bi-heart-fill"></i> NICE TO HAVE ({{ config.nice_to_have_features|length }})</h6>
+    <ul class="list-unstyled ms-2 small">
+        {% for feature in config.nice_to_have_features %}
+        <li><i class="bi bi-circle text-info"></i> {{ feature }}</li>
+        {% endfor %}
+    </ul>
+    
+    <h6 class="mt-3 text-primary"><i class="bi bi-funnel-fill"></i> CRITERIA</h6>
+    <ul class="list-unstyled ms-2 small">
+        {% if user_reqs %}
+        <li><strong>Price:</strong> €{{ "{:,}".format(user_reqs.min_price) }} - €{{ "{:,}".format(user_reqs.max_price) }}</li>
+        <li><strong>Year:</strong> {{ user_reqs.min_year }}+</li>
+        <li><strong>Mileage:</strong> &lt;{{ "{:,}".format(user_reqs.max_mileage_acceptable) }} km</li>
+        {% else %}
+        <li><strong>Price:</strong> €15,000 - €35,000</li>
+        <li><strong>Year:</strong> 2020+</li>
+        <li><strong>Mileage:</strong> &lt;150,000 km</li>
+        {% endif %}
+        <li><strong>Transmission:</strong> Automatic</li>
+        <li><strong>Doors:</strong> 5+</li>
+        <li><strong>Seats:</strong> 5+</li>
+        <li><strong>Fuel:</strong> Electric / PHEV</li>
+    </ul>
+    
+    <h6 class="mt-3 text-warning"><i class="bi bi-star-fill"></i> PREFERRED</h6>
+    <ul class="list-unstyled ms-2 small">
+        <li>Skoda Enyaq / Kodiaq</li>
+        <li>Audi e-tron / Q4 e-tron</li>
+        <li>Kia EV5 / EV6 / EV9</li>
+        <li>BMW iX3</li>
+        <li>Hyundai Tucson</li>
+        <li>Stationwagons 100km+ range</li>
+    </ul>
+</div>
+
+{% if show_filters %}
+<!-- Filters -->
+<div class="sidebar">
+    <h5><i class="bi bi-sliders"></i> Filters</h5>
+    <form method="get" id="filterForm">
+        <div class="filter-section">
+            <label class="form-label"><strong>Make</strong></label>
+            <select name="make" class="form-select form-select-sm" id="makeFilter">
+                <option value="">All Makes</option>
+                {% if available_makes %}
+                {% for make_option in available_makes %}
+                <option value="{{ make_option }}" {% if request_args and request_args.get('make') == make_option %}selected{% endif %}>{{ make_option }}</option>
+                {% endfor %}
+                {% endif %}
+            </select>
+        </div>
+
+        <div class="filter-section">
+            <label class="form-label"><strong>Model</strong></label>
+            <select name="model" class="form-select form-select-sm" id="modelFilter">
+                <option value="">All Models</option>
+                {% if available_models %}
+                {% for model_option in available_models %}
+                <option value="{{ model_option }}" {% if request_args and request_args.get('model') == model_option %}selected{% endif %}>{{ model_option }}</option>
+                {% endfor %}
+                {% endif %}
+            </select>
+        </div>
+
+        <div class="filter-section">
+            <label class="form-label"><strong>Vehicle Type</strong></label>
+            <select name="vehicle_type" class="form-select form-select-sm">
+                <option value="">All Types</option>
+                <option value="SUV" {% if request_args and request_args.get('vehicle_type') == 'SUV' %}selected{% endif %}>SUV</option>
+                <option value="Stationwagon" {% if request_args and request_args.get('vehicle_type') == 'Stationwagon' %}selected{% endif %}>Stationwagon</option>
+            </select>
+        </div>
+
+        <div class="filter-section">
+            <label class="form-label"><strong>Fuel Type</strong></label>
+            <select name="fuel_type" class="form-select form-select-sm">
+                <option value="">All Fuels</option>
+                <option value="Full Electric" {% if request_args and request_args.get('fuel_type') == 'Full Electric' %}selected{% endif %}>Full Electric</option>
+                <option value="PHEV" {% if request_args and request_args.get('fuel_type') == 'PHEV' %}selected{% endif %}>PHEV</option>
+            </select>
+        </div>
+
+        <div class="filter-section">
+            <label class="form-label"><strong>Year Range</strong></label>
+            <div class="row g-2">
+                <div class="col-6">
+                    <input type="number" name="min_year" class="form-control form-control-sm" 
+                           placeholder="Min" value="{{ request_args.get('min_year', '') if request_args else '' }}">
+                </div>
+                <div class="col-6">
+                    <input type="number" name="max_year" class="form-control form-control-sm" 
+                           placeholder="Max" value="{{ request_args.get('max_year', '') if request_args else '' }}">
+                </div>
+            </div>
+        </div>
+
+        <div class="filter-section">
+            <label class="form-label"><strong>Price Range (€)</strong></label>
+            <div class="row g-2">
+                <div class="col-6">
+                    <input type="number" name="min_price" class="form-control form-control-sm" 
+                           placeholder="Min" value="{{ request_args.get('min_price', '') if request_args else '' }}">
+                </div>
+                <div class="col-6">
+                    <input type="number" name="max_price" class="form-control form-control-sm" 
+                           placeholder="Max" value="{{ request_args.get('max_price', '') if request_args else '' }}">
+                </div>
+            </div>
+        </div>
+
+        <div class="filter-section">
+            <label class="form-label"><strong>Mileage Range (km)</strong></label>
+            <div class="row g-2">
+                <div class="col-6">
+                    <input type="number" name="min_mileage" class="form-control form-control-sm" 
+                           placeholder="Min" value="{{ request_args.get('min_mileage', '') if request_args else '' }}">
+                </div>
+                <div class="col-6">
+                    <input type="number" name="max_mileage" class="form-control form-control-sm" 
+                           placeholder="Max" value="{{ request_args.get('max_mileage', '') if request_args else '' }}">
+                </div>
+            </div>
+        </div>
+
+        <div class="filter-section">
+            <label class="form-label"><strong>Max Distance (km)</strong></label>
+            <input type="number" name="max_distance" class="form-control form-control-sm" 
+                   placeholder="50" value="{{ request_args.get('max_distance', '') if request_args else '' }}">
+        </div>
+
+        <div class="filter-section">
+            <label class="form-label"><strong>Min Storage (liters)</strong></label>
+            <input type="number" name="min_storage" class="form-control form-control-sm" 
+                   placeholder="500" value="{{ request_args.get('min_storage', '') if request_args else '' }}">
+            <small class="form-text text-muted">For family use</small>
+        </div>
+
+        <div class="filter-section">
+            <label class="form-label"><strong>Critical Features</strong></label>
+            <div class="accordion accordion-flush" id="featureAccordion">
+                <!-- Features will be loaded dynamically by category -->
+                <div class="text-center p-2">
+                    <small class="text-muted"><i class="bi bi-hourglass-split"></i> Loading...</small>
+                </div>
+            </div>
+            <small class="text-muted d-block mt-2">
+                Select features car must have. Leave empty to show all cars.
+            </small>
+        </div>
+
+        <div class="filter-section">
+            <label class="form-label"><strong>Sort By</strong></label>
+            <select name="sort_by" class="form-select form-select-sm">
+                <option value="last_seen" {% if request_args and request_args.get('sort_by', 'last_seen') == 'last_seen' %}selected{% endif %}>Newest First</option>
+                <option value="price_asc" {% if request_args and request_args.get('sort_by') == 'price_asc' %}selected{% endif %}>Price: Low to High</option>
+                <option value="price_desc" {% if request_args and request_args.get('sort_by') == 'price_desc' %}selected{% endif %}>Price: High to Low</option>
+                <option value="distance" {% if request_args and request_args.get('sort_by') == 'distance' %}selected{% endif %}>Closest First</option>
+                <option value="features" {% if request_args and request_args.get('sort_by') == 'features' %}selected{% endif %}>Most Features</option>
+            </select>
+        </div>
+
+        <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" name="only_complete" 
+                   id="onlyComplete" value="1" {% if request_args and request_args.get('only_complete') %}checked{% endif %}>
+            <label class="form-check-label" for="onlyComplete">
+                <small>Only All Critical Features</small>
+            </label>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-sm w-100">
+            <i class="bi bi-search"></i> Apply Filters
+        </button>
+        <a href="{{ request.path }}" class="btn btn-secondary btn-sm w-100 mt-2">
+            <i class="bi bi-x-circle"></i> Reset
+        </a>
+    </form>
+</div>
+{% endif %}
+
+{% if stats %}
+<!-- Statistics -->
+<div class="sidebar">
+    <h5><i class="bi bi-bar-chart-fill"></i> Statistics</h5>
+    <div class="stats-card card mb-2">
+        <div class="card-body p-2">
+            <small class="text-muted">Total Cars</small>
+            <h4 class="mb-0">{{ stats.total_cars }}</h4>
+        </div>
+    </div>
+    <div class="stats-card card mb-2">
+        <div class="card-body p-2">
+            <small class="text-muted">Perfect Matches</small>
+            <h4 class="mb-0 text-success">{{ stats.perfect_matches }}</h4>
+        </div>
+    </div>
+    <div class="stats-card card mb-2">
+        <div class="card-body p-2">
+            <small class="text-muted">Avg. Price</small>
+            <h4 class="mb-0">{{ stats.avg_price | format_price }}</h4>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if trade_in_value %}
+<!-- Trade-in Value -->
+<div class="sidebar">
+    <h5><i class="bi bi-cash-coin"></i> Your Trade-In</h5>
+    <div class="alert alert-success mb-0 p-2">
+        <small class="text-muted">Estimated Value</small>
+        <h4 class="mb-0">€{{ "{:,}".format(trade_in_value) }}</h4>
+        <small class="text-muted">Net costs shown on cards</small>
+    </div>
+</div>
+{% endif %}
+
+{% endmacro %}

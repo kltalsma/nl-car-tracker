@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+
+{% block title %}TEST EDIT - {{ car.make }} {{ car.model }} - T.A.L.S.M.A.-S.C.H.A.A.P.{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="mb-3">
+        <a href="/" class="btn btn-secondary btn-sm">
+            <i class="bi bi-arrow-left"></i> Back to Listings
+        </a>
+    </div>
+
+    {% if duplicates and duplicates|length > 0 %}
+    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+        <h5 class="alert-heading"><i class="bi bi-exclamation-triangle-fill"></i> Potential Duplicate Listings Found</h5>
+        <p class="mb-2">We found {{ duplicates|length }} similar listing{{ 's' if duplicates|length > 1 else '' }} that may be the same vehicle:</p>
+        <ul class="mb-3">
+            {% for dup in duplicates %}
+            <li>
+                <a href="/car/{{ dup.id }}" class="alert-link" target="_blank">
+                    {{ dup.make }} {{ dup.model }} ({{ dup.year }})
+                </a>
+                - {{ dup.price | format_price }}
+                {% if dup.mileage_km %} • {{ dup.mileage_km | format_mileage }}{% endif %}
+                • {{ dup.source }}
+                {% if dup.price < car.price %}
+                <span class="badge bg-success">€{{ car.price - dup.price }} cheaper</span>
+                {% elif dup.price > car.price %}
+                <span class="badge bg-danger">€{{ dup.price - car.price }} more expensive</span>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        <small class="text-muted">These listings have similar make, model, year, mileage, and price. They may be the same vehicle listed on multiple platforms.</small>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endif %}
+
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h3>{{ car.make }} {{ car.model }}</h3>
+                    <p class="mb-0 text-muted">{{ car.year }} • {{ car.fuel_type }} • {{ car.vehicle_type }}</p>
+                </div>
+                <div class="card-body">
+                    {% if car.primary_image_url %}
+                    <img src="{{ car.primary_image_url }}" class="img-fluid mb-3" alt="{{ car.make }} {{ car.model }}">
+                    {% endif %}
+
+                    <div class="price-tag mb-3">{{ car.price | format_price }}</div>
+                    
+                    {% if trade_in_value %}
+                    <div class="alert alert-success mb-3">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong><i class="bi bi-cash-stack"></i> Net Cost:</strong>
+                                <span class="fs-4 text-success">€{{ "{:,}".format(car.price - trade_in_value) }}</span>
+                            </div>
+                            <small class="text-muted">After €{{ "{:,}".format(trade_in_value) }} trade-in</small>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <h5>Vehicle Specifications</h5>
+                    <table class="table table-sm">
+                        <tr>
+                            <th>Make</th>
+                            <td>{{ car.make }}</td>
+                        </tr>
+                        <tr>
+                            <th>Model</th>
+                            <td>{{ car.model }}</td>
+                        </tr>
+                        <tr>
+                            <th>Year</th>
+                            <td>{{ car.year }}</td>
+                        </tr>
+                        <tr>
+                            <th>Mileage</th>
+                            <td>{{ car.mileage_km | format_mileage }}</td>
+                        </tr>
+                        <tr>
+                            <th>Fuel Type</th>
+                            <td>{{ car.fuel_type }}</td>
+                        </tr>
+                        {% set primary_range = car.ad_listed_range_km or car.electric_range_km or car.range_km %}
+                        {% if primary_range %}
+                        <tr>
+                            <th>Range</th>
+                            <td>{{ primary_range }} km</td>
+                        </tr>
+                        {% endif %}
+                        {% if car.fuel_type == 'Full Electric' %}
+                        <tr>
+                            <th>Range Information</th>
+                            <td>
+                                {% if car.battery_size %}
+                                <strong>Battery:</strong> {{ car.battery_size }} kWh<br>
+                                {% endif %}
+                                {% set ad_range = car.electric_range_km or car.ad_listed_range_km %}
+                                {% if ad_range %}
+                                <strong>Listed in ad:</strong> {{ ad_range }} km<br>
+                                {% endif %}
+                                {% if car.wltp_reference_range_km %}
+                                <strong>WLTP (Official):</strong> {{ car.wltp_reference_range_km }} km
+                                {% if ad_range and ad_range > car.wltp_reference_range_km %}
+                                <span class="badge bg-warning text-dark ms-1" title="Ad-listed range exceeds official WLTP - may be inflated or incorrectly specified">⚠️ Suspicious</span>
+                                {% endif %}
+                                <br>
+                                {% elif car.wltp_range %}
+                                <strong>WLTP:</strong> {{ car.wltp_range }} km<br>
+                                {% endif %}
+                                {% if car.ev_db_range %}
+                                <strong>Real-world range:</strong> City {{ car.ev_db_range.city_mild|int }} km, Highway {{ car.ev_db_range.highway_mild|int }} km
+                                <span class="text-muted small">(EV-Database mild weather)</span><br>
+                                {% elif car.evdb_real_range_km %}
+                                <strong>Real-world range:</strong> {{ car.evdb_real_range_km }} km
+                                <span class="text-muted small">(EV-Database estimate)</span><br>
+                                {% elif car.electric_range_km and car.electric_range_km != ad_range %}
+                                <strong>Real-world range:</strong> {{ car.electric_range_km }} km
+                                <span class="text-muted small">(From seller - Actieradius praktijk)</span><br>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% elif primary_range %}
+                        <tr>
+                            <th>Electric Range</th>
+                            <td>{{ primary_range }} km</td>
+                        </tr>
+                        {% endif %}
+                        {% if car.color %}
+                        <tr>
+                            <th>Color</th>
+                            <td>{{ car.color }}</td>
+                        </tr>
+                        {% endif %}
+                        {% if car.transmission %}
+                        <tr>
+                            <th>Transmission</th>
+                            <td>{{ car.transmission }}</td>
+                        </tr>
+                        {% endif %}
+                        {% if car.storage_capacity_liters %}
+                        <tr>
+                            <th>Storage Capacity</th>
+                            <td>
+                                <i class="bi bi-box-seam"></i> {{ car.storage_capacity_liters }}L
+                                {% if car.storage_capacity_seats_down_liters %}
+                                ({{ car.storage_capacity_seats_down_liters }}L with seats down)
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endif %}
+                        {% if car.seats %}
+                        <tr>
+                            <th>Seats</th>
+                            <td>{{ car.seats }}</td>
+                        </tr>
+                        {% endif %}
+                        <tr>
+                            <th>Location</th>
+                            <td>{{ car.location_city or 'Not available' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Distance from Heerenveen</th>
+                            <td>
+                                {% if car.distance_from_heerenveen_km %}
+                                    {{ car.distance_from_heerenveen_km | format_distance }} <span class="text-muted">(driving distance)</span>
+                                {% else %}
+                                    Unknown
+                                {% endif %}
+                            </td>
+                        </tr>
+                    </table>
+
+                    {% if car.ev_db_range %}
+                    <h5 class="mt-4">Range Breakdown (Real-World Testing)</h5>
+                    <p class="text-muted small">
+                        Data from EV-Database real-world testing
+                        <i class="bi bi-info-circle" title="City range is often higher than WLTP due to regenerative braking and lower speeds. Highway range is lower due to higher speeds and no regen opportunities." style="cursor: help;"></i>
+                    </p>
+                    <table class="table table-sm table-striped">
+                        <thead>
+                            <tr>
+                                <th>Scenario</th>
+                                <th>Mild Weather</th>
+                                <th>Cold Weather</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <th>City Driving</th>
+                                <td>{{ car.ev_db_range.city_mild|int }} km</td>
+                                <td>{{ car.ev_db_range.city_cold|int }} km</td>
+                            </tr>
+                            <tr>
+                                <th>Highway Driving</th>
+                                <td>{{ car.ev_db_range.highway_mild|int }} km</td>
+                                <td>{{ car.ev_db_range.highway_cold|int }} km</td>
+                            </tr>
+                            <tr>
+                                <th>Combined</th>
+                                <td>{{ car.ev_db_range.combined_mild|int }} km</td>
+                                <td>{{ car.ev_db_range.combined_cold|int }} km</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <p class="text-muted small">
+                        <i class="bi bi-info-circle"></i> 
+                        Mild weather: ~23°C, Cold weather: -10°C with heating. Highway driving at 110 km/h.
+                    </p>
+                    {% endif %}
+
+                    {% if car.towing_range %}
+                    <h5 class="mt-4">Estimated Towing Range</h5>
+                    <p class="text-muted small">
+                        <i class="bi bi-info-circle"></i> 
+                        Estimated highway range when towing a tent trailer (750-1000kg)
+                    </p>
+                    <div class="alert alert-info">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <strong>Estimated Highway Range:</strong> 
+                                <span data-bs-toggle="tooltip" data-bs-placement="top" title="Based on {{ car.towing_range.source }}">
+                                    ~{{ car.towing_range.estimated_range_km|int }} km
+                                </span>
+                            </div>
+                            <div class="col-md-6">
+                                <strong>Base Range:</strong> {{ car.towing_range.base_range|int }} km ({{ car.towing_range.source }})<br>
+                                <strong>Reduction:</strong> {{ car.towing_range.reduction_percent }}% for aerodynamic impact
+                            </div>
+                        </div>
+                    </div>
+                    <p class="text-muted small">
+                        <i class="bi bi-exclamation-triangle"></i> 
+                        This is a conservative estimate for highway towing. Actual range depends on trailer aerodynamics, weight, road conditions, and driving style. 
+                        City driving with a trailer may achieve better efficiency due to lower speeds and regenerative braking.
+                    </p>
+                    {% endif %}
+
+                    <h5 class="mt-4">Dealer Information</h5>
+                    <p>
+                        <strong>{{ car.dealer_name or 'Unknown Dealer' }}</strong><br>
+                        {% if car.dealer_location %}{{ car.dealer_location }}{% endif %}
+                    </p>
+
+                    <h5 class="mt-4">Features Overview</h5>
+                    
+                    <!-- Critical Features -->
+                    <h6 class="mt-3"><i class="bi bi-shield-fill-check text-danger"></i> Critical Features</h6>
+                    {% if critical_missing|length == 0 %}
+                    <div class="alert alert-success">
+                        <i class="bi bi-check-circle-fill"></i> <strong>All critical features present!</strong>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle-fill"></i> Missing {{ critical_missing|length }} critical feature(s).
+                    </div>
+                    {% endif %}
+                    
+                    <div class="mb-3">
+                        {% for feature in critical_present %}
+                        <span class="badge bg-success feature-badge">
+                            <i class="bi bi-check"></i> {{ feature }}
+                        </span>
+                        {% endfor %}
+                        {% for feature in critical_missing %}
+                        <span class="badge bg-danger feature-badge">
+                            <i class="bi bi-x"></i> {{ feature }}
+                        </span>
+                        {% endfor %}
+                    </div>
+
+                    <!-- Nice-to-Have Features -->
+                    <h6 class="mt-3"><i class="bi bi-star text-warning"></i> Nice-to-Have Features ({{ nice_present|length }}/{{ nice_present|length + nice_missing|length }})</h6>
+                    <div class="mb-3">
+                        {% for feature in nice_present %}
+                        <span class="badge bg-success feature-badge">
+                            <i class="bi bi-check"></i> {{ feature }}
+                        </span>
+                        {% endfor %}
+                        {% for feature in nice_missing %}
+                        <span class="badge bg-secondary feature-badge">
+                            <i class="bi bi-dash"></i> {{ feature }}
+                        </span>
+                        {% endfor %}
+                    </div>
+
+                    <div class="d-grid gap-2 mt-4">
+                        <a href="{{ car.listing_url }}" target="_blank" class="btn btn-primary btn-lg">
+                            <i class="bi bi-box-arrow-up-right"></i> View on {{ car.source_website }}
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card mb-3">
+                <div class="card-header">
+                    <h5><i class="bi bi-graph-up"></i> Price History</h5>
+                </div>
+                <div class="card-body">
+                    {% if price_history|length > 1 %}
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Price</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for entry in price_history %}
+                            <tr>
+                                <td><small>{{ entry.recorded_at | format_datetime }}</small></td>
+                                <td>{{ entry.price | format_price }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p class="text-muted">No price changes recorded yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="bi bi-info-circle"></i> Listing Info</h5>
+                </div>
+                <div class="card-body">
+                    <p><small><strong>Source:</strong> {{ car.source_website }}</small></p>
+                    <p><small><strong>First Seen:</strong> {{ car.first_seen | format_datetime }}</small></p>
+                    <p><small><strong>Last Seen:</strong> {{ car.last_seen | format_datetime }}</small></p>
+                    <p><small><strong>Status:</strong> 
+                        {% if car.is_available %}
+                        <span class="badge bg-success">Available</span>
+                        {% else %}
+                        <span class="badge bg-danger">Not Available</span>
+                        {% endif %}
+                    </small></p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Initialize Bootstrap tooltips
+    document.addEventListener('DOMContentLoaded', function() {
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+    });
+</script>
+{% endblock %}

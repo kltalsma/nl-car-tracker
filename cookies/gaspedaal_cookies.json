@@ -1,0 +1,200 @@
+[
+  {
+    "name": "authId",
+    "value": "514decef-a5e3-4bbf-b965-2521f8e7a48f",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "tcf20_purposes",
+    "value": "non-personalised_ads|marketing|targeted_advertising|personalisation|functional|analytics|advertising_10|advertising_9|advertising_7|social_media|advertising_4|advertising_3|advertising_2|advertising_1|geolocation|online_gambling_ads",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "AT-cx_done",
+    "value": "true",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_vwo_uuid_v2",
+    "value": "D5E2AD7D822B16951B9CA76B2EFF7157A|ed22e9f6ffa9ecf730f4e8bccf8e8792",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_ga",
+    "value": "GA1.1.189830318.1761650946",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_vwo_uuid",
+    "value": "D5E2AD7D822B16951B9CA76B2EFF7157A",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_vwo_ds",
+    "value": "3%241761650946%3A21.7730426%3A%3A%3A%3A%3A1761650946%3A1761650946",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_sp_ses.c3cf",
+    "value": "*",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "usbls",
+    "value": "1",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_vis_opt_s",
+    "value": "1%7C",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_vis_opt_test_cookie",
+    "value": "1",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "FPLC",
+    "value": "64FYB7Gf%2F%2B%2Bwemw6jXJZo%2BYpobTHngNTpQ3Jucp4VOIU%2BswNmJPEqMYnOTPQ0pgEPbokhTujg3eqk%2B5MhWHghygBA4tiuIDX7vg4tmKZEnbBgRiEg2FSzvn%2B57vxDg%3D%3D",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "FPAU",
+    "value": "1.2.477757736.1761650946",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_vis_opt_exp_131_combi",
+    "value": "2",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_pcid",
+    "value": "%7B%22browserId%22%3A%22mhahhlupu88o4gn7%22%7D",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "cX_P",
+    "value": "mhahhlupu88o4gn7",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_hjSession_123104",
+    "value": "eyJpZCI6Ijg0YmRlZTZjLWFhNGMtNGZjNy1iODFmLWQ2NDlmYjQ1MzEwOSIsImMiOjE3NjE2NTA5NDY2MzIsInMiOjAsInIiOjAsInNiIjowLCJzciI6MCwic2UiOjAsImZzIjoxLCJzcCI6MH0=",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_pubcid",
+    "value": "cc1f9c73-45bb-4704-a17d-3627482df40d",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_pubcid_cst",
+    "value": "1Sw1LPksBA%3D%3D",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "cX_G",
+    "value": "cx%3A3ezgg78sx1oaa9inv9cj3cwb2%3A268mc0oq6c0kn",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "BCSessionID",
+    "value": "a316006e-d90e-48f7-8990-eec7af30b379",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_hjSessionUser_123104",
+    "value": "eyJpZCI6IjQxYmMzMGUyLTYwNGMtNTBkMC1iZWFhLTE3MWYzZTc3ODQwMSIsImNyZWF0ZWQiOjE3NjE2NTA5NDY2MzEsImV4aXN0aW5nIjp0cnVlfQ==",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "qtracker",
+    "value": "eyJJRCI6ImUyMTEzOGM4LTI3ZGEtNGExZC1hZGE0LTBmMTE5ODUwOTAzZiIsImV4cGlyZXMiOjE3NjE4MjM3NjN9",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "bm_sv",
+    "value": "ACD0C864CE3A6F4CBD9E4B1D7095CCDA~YAAQRwcQAs4reiWaAQAAvoClKh1qOPX4lBfPyf4MkBBKyPifs+v70i/MglI1LgjlmuvencexX9K+ppch78qDF9G54kjzxV2Hkld5CZvwgkn2pwiYb4/pHbuBZnLoG/Vvk2Th/tpq41uClnialKNBVgqRTdHwv9r8l0r3awEQVJJuJ/9y4mKgNxz/azYcMT4093D49A01OkJFHSe3/WvlVjoKyizWnrRQ69ENIi+w3gREf1E6wvfJGkodHG0TspIJw1s=~1",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_vwo_sn",
+    "value": "0%3A4%3A%3A%3A1%3A%3A72",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_ga_7V1FP9LXV9",
+    "value": "GS2.1.s1761650946$o1$g1$t1761652080$j60$l0$h1999677735",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_pctx",
+    "value": "%7Bu%7DN4IgrgzgpgThIC5QFYCMAWAJlAxlAZgLQCGyUAzIegEbVHUCcAbMoQEzJur4AcUA7MXQ98wTAAcIAX0ShxMAgEsAHohAT4AGhAAXAJ7ioagMIANEFKnbIsAMo7iOyGuIA7APauQ2iIp1QASUw1VAxOHmRI5Aj%2BcjYeOLYLIA",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "cto_bidid",
+    "value": "rRDM3F9KMnFrdHNZYnVaclpBdkdwNGZENU1IVGlmeHRYZVNyNzljUGt2cGQ1NUpTSkx6ZEM0JTJCeUJXYThBOE9udzA2Y3Vua0ZnNkU4OCUyQlNpa3FXWlNoJTJGJTJCcHFydyUyQmVxbCUyQkNzSUxaVFNYQWNUJTJCWDBnJTNE",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_sp_id.c3cf",
+    "value": "c0ea5b85-684b-4ac9-9993-d73c0dd1776a.1761650946.1.1761652081..3a6f3bc3-83ad-4053-971e-29b483bf177c..0a7102ea-e237-4534-9ba6-9ad49466ed15.1761650946493.13",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_uetsid",
+    "value": "50734750b3f111f08e8e85500fb951e4|jthuiz|2|g0j|0|2127",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "_uetvid",
+    "value": "507363c0b3f111f0ab0ec5dc75688778",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "FPGSID",
+    "value": "1.1761650946.1761652081.G-7V1FP9LXV9.QROq31dVwyMQpn3XGscoZQ",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  },
+  {
+    "name": "cto_bundle",
+    "value": "w5wa4V9oclFsamFYcGxxdEpSeW8lMkJMalc0a1lHTHpRQ1dRdFRheHNpWGlnc3BEaXJESmVDM3Y1ZzBQR21VT2w5Q1RJUGZlcnFCeWpBUmtmRTI5WHVCMkRpSktMZlNQZlNJblZxUWpaZUEzb0NKd01GNVNxYm5DR3JCVHpFVkJCOXZqcGVFRzFTS1NpRGROMGNCZ0lKT2FxVXdDVDQyZzUxZzh4NUo0RkJvNXRRUmduUSUzRA",
+    "domain": ".gaspedaal.nl",
+    "path": "/"
+  }
+]

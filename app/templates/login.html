@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Login - T.A.L.S.M.A.-S.C.H.A.A.P.{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center" style="margin-top: 100px;">
+        <div class="col-md-6 col-lg-4">
+            <div class="card shadow">
+                <div class="card-body p-5">
+                    <h3 class="text-center mb-4" title="The Analytical List System for Motor-vehicle Acquisitions - Selection, Comparison, and Hybrid Assessment Platform">T.A.L.S.M.A.-S.C.H.A.A.P.</h3>
+                    <h5 class="text-center text-muted mb-4">Inloggen</h5>
+                    
+                    {% with messages = get_flashed_messages(with_categories=true) %}
+                        {% if messages %}
+                            {% for category, message in messages %}
+                                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                    {{ message }}
+                                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+                    {% endwith %}
+                    
+                    <form method="POST" action="{{ url_for('login') }}">
+                        <div class="mb-3">
+                            <label for="username" class="form-label">Gebruikersnaam</label>
+                            <input type="text" class="form-control" id="username" name="username" 
+                                   required autofocus autocomplete="username">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="password" class="form-label">Wachtwoord</label>
+                            <input type="password" class="form-control" id="password" name="password" 
+                                   required autocomplete="current-password">
+                        </div>
+                        
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" id="remember" name="remember">
+                            <label class="form-check-label" for="remember">
+                                Onthoud mij
+                            </label>
+                        </div>
+                        
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-primary btn-lg">Inloggen</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,391 @@
+vehicle_classification:
+  suv_models:
+    Toyota:
+    - bZ4X
+    - RAV4
+    - C-HR
+    Mercedes-Benz:
+    - EQA
+    - EQB
+    - EQC
+    - GLA
+    - GLB
+    - GLC
+    - GLE
+    Audi:
+    - e-tron
+    - Q4
+    - Q5
+    - Q7
+    - Q8
+    BMW:
+    - iX
+    - iX3
+    - X1
+    - X3
+    - X5
+    - iX1
+    Volkswagen:
+    - ID.4
+    - ID.5
+    - Tiguan
+    - T-Roc
+    Kia:
+    - e-Niro
+    - Niro
+    - EV6
+    - Sportage
+    - EV5
+    - EV9
+    Hyundai:
+    - Ioniq 5
+    - Tucson
+    Volvo:
+    - XC40
+    - XC60
+    - XC90
+    - C40
+    - EX40
+    - EX30
+    Tesla:
+    - Model X
+    - Model Y
+    Peugeot:
+    - e-2008
+    - '2008'
+    - '3008'
+    - '5008'
+    MINI:
+    - Countryman
+    - Aceman
+    Ford:
+    - Mustang Mach-E
+    - Kuga
+    Nissan:
+    - Ariya
+    - Qashqai
+    CUPRA:
+    - Tavascan
+    - Formentor
+    - Ateca
+    Skoda:
+    - Enyaq
+    Mazda:
+    - MX-30
+    - CX-30
+    - CX-5
+    - CX-60
+    Renault:
+    - Megane E-Tech
+    MG:
+    - ZS
+    - Marvel R
+    - HS
+    Polestar:
+    - '2'
+    - '3'
+    - '4'
+  stationwagon_models:
+    Volkswagen:
+    - Passat Variant
+    - ID.7 Tourer
+    Audi:
+    - A4 Avant
+    - A6 Avant
+    BMW:
+    - 3 Series Touring
+    - 5 Series Touring
+    - i4 Touring
+    Mercedes-Benz:
+    - C-Class Estate
+    - E-Class Estate
+    Volvo:
+    - V60
+    - V90
+    Peugeot:
+    - 308 SW
+    - 508 SW
+    Skoda:
+    - Octavia Combi
+    - Superb Combi
+    Opel:
+    - Astra Sports Tourer
+    SEAT:
+    - Leon Sportstourer
+    - Leon ST
+    CUPRA:
+    - Leon Sportstourer
+  exclude_models:
+    Ford:
+    - Tourneo
+    - Transit
+    - Puma
+    - Kuga
+    Fiat: []
+    Jeep:
+    - Avenger
+    Peugeot:
+    - e-208
+    - '208'
+    - e-2008
+    - '2008'
+    Opel:
+    - Astra
+    - Mokka
+    - Corsa-e
+    - Corsa-e GS
+    Renault:
+    - Megane E-Tech
+    - Kangoo
+    - Kangoo Advance
+    - Twingo
+    - Twingo Z.E. R80
+    Citroen:
+    - Ami
+    - C3
+    - C3 Aircross
+    BYD:
+    - Dolphin
+    - Seal
+    - ETP3
+    Alfa Romeo:
+    - Junior
+    MG:
+    - MG4
+    - MG5
+    Hyundai:
+    - i20
+    - i30
+    - Ioniq
+    - i10
+    - Inster
+    - Kona
+    Toyota:
+    - C-HR
+    - C Hr
+    - Corolla
+    - Yaris
+    - Yaris Cross
+    - Prius
+    Nissan:
+    - Leaf
+    - Qashqai
+    - Juke
+    - Townstar
+    Mazda:
+    - CX-30
+    - MX-30
+    - '3'
+    - Mazda3
+    - '2'
+    Honda:
+    - e
+    - HR-V
+    Volkswagen:
+    - e-Golf
+    - Golf
+    - T-Roc
+    - Polo
+    - ID.3
+    - e-Up
+    - e-up! e-up! Style
+    - ID. Buzz Cargo
+    Audi:
+    - A3
+    - Q2
+    BMW:
+    - 1 Series
+    - 2 Series
+    Mercedes-Benz:
+    - A-Class
+    - B-Class
+    - EQA
+    - GLA
+    - Citan
+    Tesla: []
+    Skoda:
+    - Citigo
+    - Fabia
+    - Scala
+    SEAT:
+    - Ibiza
+    - Arona
+    - Leon
+    CUPRA:
+    - Born
+    Volvo:
+    - EX30
+    MINI: []
+    Mini: []
+    Smart: []
+    Edrive: []
+    Overig:
+    - scootmobiel
+    - Edrive
+    - E-Car
+    Dacia:
+    - Spring
+    smart: []
+    'smart #1': []
+    Peugot:
+    - e-208
+    Dongfeng: []
+    Kia:
+    - E Soul
+    - Soul e-Soul
+    - e-Soul
+search_criteria:
+  min_price: 15000
+  max_price: 35000
+  min_year: 2020
+  acceptable_year: 2020
+  max_mileage_km: 150000
+  max_mileage_acceptable: 150000
+  min_doors: 4
+  min_seats: 5
+preferred_cars:
+  makes:
+  - Skoda
+  - Audi
+  - Kia
+  - BMW
+  - Hyundai
+  models:
+  - Enyaq
+  - Kodiaq
+  - Superb
+  - e-tron
+  - Q4 e-tron
+  - EV5
+  - EV6
+  - EV9
+  - iX3
+  - Tucson
+  auto_prefer_wagons_min_range: 100
+search:
+  vehicle_types:
+  - type: SUV
+    max_price: 35000
+  - type: Stationwagon
+    max_price: 35000
+  fuel_types:
+  - type: Full Electric
+    min_range_km: 300
+  - type: PHEV
+    min_electric_range_km: 30
+  max_mileage_km: 150000
+  min_year: 2020
+  min_storage_capacity_liters: 400
+  min_seats: 5
+  location:
+    center: Heerenveen
+    radius_km: 100
+critical_features:
+- Cruise Control
+- Android Auto
+- Navigatiesysteem
+- Digitale radio-ontvangst
+- Parkeerhulp met camera
+- Climate Control
+- Lane Departure Warning Systeem
+- Parkeerhulp achter
+- Adaptive Cruise Control
+- Park Assist
+- Achteruitrijcamera
+- "360\xB0 camera"
+- Dodehoekdetectie
+- Botswaarschuwing
+- Parkeerhulp automatisch
+- Verkeersbordherkenning
+- DAB+ radio
+nice_to_have_features:
+- Trekhaak
+- Hill-Hold Control
+- Dodehoekdetectie
+- LED verlichting
+- Stoelverwarming
+- Lederen bekleding
+- Stuurverwarming
+- Keyless Entry
+scraping:
+  websites:
+  - name: autoscout24.nl
+    enabled: true
+    base_url: https://www.autoscout24.nl
+  - name: autotrack.nl
+    enabled: true
+    base_url: https://www.autotrack.nl
+  - name: gaspedaal.nl
+    enabled: true
+    base_url: https://www.gaspedaal.nl
+  - name: vandenbrug.nl
+    enabled: true
+    base_url: https://vandenbrug.nl
+  rate_limit:
+    min_delay_seconds: 1800
+    max_delay_seconds: 3600
+    request_delay_seconds: 2
+  browser:
+    headless: true
+    user_agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
+      (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+    timeout_seconds: 30
+    screenshot_on_error: true
+  scheduler:
+    enabled: true
+    interval_minutes: 60
+    run_on_startup: true
+database:
+  path: data/cars.db
+  backup_path: data/backups
+  retention_days: 90
+dashboard:
+  port: 5002
+  host: 0.0.0.0
+  debug: true
+  items_per_page: 20
+  analytics:
+    price_trend_days: 30
+    enable_charts: true
+logging:
+  level: INFO
+  log_file: logs/scraper.log
+  max_file_size_mb: 10
+  backup_count: 5
+notifications:
+  email:
+    enabled: false
+    smtp_server: smtp.gmail.com
+    smtp_port: 587
+    from_email: ${GMAIL_USER}
+    from_password: ${GMAIL_APP_PASSWORD}
+    to_email: kltalsma@gmail.com
+    notify_on_top_match: true
+    notify_on_unavailable_preferred: true
+    min_score_for_notification: 85
+availability_checker:
+  enabled: true
+  check_interval_hours: 0.26666666666666666
+  check_stale_cars_days: 1
+  scrape_alternatives: true
+  notify_on_preferred_unavailable: true
+  max_cars_per_run: 100
+  recheck_unavailable:
+    enabled: true
+    check_interval_hours: 168
+    max_cars_per_run: 50
+    only_recheck_verified: true
+  min_features_required: 3
+current_car:
+  license_plate: SX-515-N
+  mileage_km: 151000
+  make: OPEL
+  model: ASTRA SPORTS TOURER+
+  year: 2018
+  initial_purchase_price: 16750
+  purchase_date: 2022-01-15
+  average_km_per_year: 27000
+trade_in_checker:
+  enabled: true
+  check_interval_hours: 168
+  autoscout24_url: https://www.autoscout24.nl/waardebepaling/

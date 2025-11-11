@@ -1,0 +1,647 @@
+{% extends "base.html" %}
+
+{% block title %}Trade-In Value - T.A.L.S.M.A.-S.C.H.A.A.P.{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h2 class="mb-4"><i class="bi bi-car-front-fill"></i> Trade-In Value Management</h2>
+    
+    {% if current_car %}
+    <div class="row">
+        <div class="col-md-6">
+            <!-- Current Car Info -->
+            <div class="card mb-4">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="bi bi-info-circle"></i> Your Current Car</h5>
+                </div>
+                <div class="card-body">
+                    <table class="table table-sm">
+                        <tr>
+                            <th>License Plate:</th>
+                            <td><strong>{{ current_car.license_plate }}</strong></td>
+                        </tr>
+                        <tr>
+                            <th>Make/Model:</th>
+                            <td>{{ current_car.make }} {{ current_car.model }}</td>
+                        </tr>
+                        {% if current_car.year %}
+                        <tr>
+                            <th>Year:</th>
+                            <td>{{ current_car.year }}</td>
+                        </tr>
+                        {% endif %}
+                        {% if current_car.mileage_km %}
+                        <tr>
+                            <th>Last Recorded Mileage:</th>
+                            <td>{{ current_car.mileage_km | format_mileage }}</td>
+                        </tr>
+                        {% endif %}
+                    </table>
+                    
+                    {% if current_trade_in_value %}
+                    <div class="alert alert-success mt-3">
+                        <h5 class="mb-0">
+                            <i class="bi bi-cash-stack"></i> Current Trade-In Value: 
+                            <strong>€{{ "{:,}".format(current_trade_in_value) }}</strong>
+                        </h5>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-warning mt-3">
+                        <i class="bi bi-exclamation-triangle"></i> No trade-in value set yet
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Update Form -->
+            <div class="card mb-4">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0"><i class="bi bi-pencil-square"></i> Update Trade-In Value</h5>
+                </div>
+                <div class="card-body">
+                    <form id="updateTradeInForm">
+                        <div class="mb-3">
+                            <label for="selling_price" class="form-label">
+                                <strong>Selling Price (€)</strong>
+                                <small class="text-muted d-block">How much you expect to get when selling your car</small>
+                            </label>
+                            <input type="number" 
+                                   class="form-control" 
+                                   id="selling_price" 
+                                   name="selling_price" 
+                                   min="100" 
+                                   max="200000" 
+                                   step="1"
+                                   value="{{ current_trade_in_value if current_trade_in_value else '' }}"
+                                   required>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="mileage_km" class="form-label">
+                                <strong>Current Mileage (km)</strong>
+                                <small class="text-muted d-block">Your car's current odometer reading</small>
+                            </label>
+                            <input type="number" 
+                                   class="form-control" 
+                                   id="mileage_km" 
+                                   name="mileage_km" 
+                                   min="0" 
+                                   max="500000" 
+                                   step="1"
+                                   value="{{ current_car.mileage_km if current_car.mileage_km else '' }}"
+                                   required>
+                        </div>
+                        
+                        <div class="alert alert-info">
+                            <small>
+                                <i class="bi bi-info-circle"></i> 
+                                This value will be used to calculate the net cost of cars you're considering. 
+                                Net cost = Car price - Your trade-in value
+                            </small>
+                        </div>
+                        
+                        <div id="updateMessage" class="alert" style="display: none;"></div>
+                        
+                        <button type="submit" class="btn btn-success btn-lg w-100">
+                            <i class="bi bi-check-circle"></i> Update Trade-In Value
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-6">
+            <!-- Trade-In Value History -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-clock-history"></i> Value History</h5>
+                </div>
+                <div class="card-body">
+                    {% if trade_in_history %}
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Value</th>
+                                    <th>Mileage</th>
+                                    <th>Source</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for entry in trade_in_history %}
+                                <tr>
+                                    <td><small>{{ entry.checked_at | format_datetime }}</small></td>
+                                    <td>
+                                        <strong>€{{ "{:,}".format(entry.selling_price if entry.selling_price else (entry.market_value if entry.market_value else entry.asking_price)) }}</strong>
+                                    </td>
+                                    <td><small>{{ entry.mileage_km | format_mileage }}</small></td>
+                                    <td>
+                                        <span class="badge {% if entry.source == 'manual' %}bg-primary{% else %}bg-secondary{% endif %}">
+                                            {{ entry.source }}
+                                        </span>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted">No value history available yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Depreciation Calculator -->
+            <div class="card mt-4">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0"><i class="bi bi-calculator"></i> Estimated Value Calculator</h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">
+                        Calculate your car's estimated value based on depreciation patterns.
+                    </p>
+                    
+                    <!-- Mileage Update Section -->
+                    <div class="mb-3">
+                        <label for="calculatorMileage" class="form-label">
+                            <strong>Current Odometer Reading (km)</strong>
+                            <small class="text-muted d-block">Update your car's current mileage</small>
+                        </label>
+                        <div class="input-group">
+                            <input type="number" 
+                                   class="form-control" 
+                                   id="calculatorMileage" 
+                                   name="calculator_mileage" 
+                                   min="0" 
+                                   max="500000" 
+                                   step="1"
+                                   {% if current_car.mileage_km %}value="{{ current_car.mileage_km }}"{% endif %}
+                                   placeholder="Enter current mileage">
+                            <button class="btn btn-outline-secondary" type="button" id="updateMileageBtn">
+                                <i class="bi bi-arrow-clockwise"></i> Update
+                            </button>
+                        </div>
+                        <div id="mileageUpdateStatus" class="mt-2" style="display: none;"></div>
+                    </div>
+                    
+                    <button id="calculateDepreciationBtn" class="btn btn-info w-100 mb-3">
+                        <i class="bi bi-calculator"></i> Calculate Estimated Value
+                    </button>
+                    
+                    <div id="depreciationResults" style="display: none;">
+                        <div class="alert alert-light border">
+                            <h6 class="mb-3"><i class="bi bi-graph-down"></i> Depreciation Analysis</h6>
+                            
+                            <div class="row mb-3">
+                                <div class="col-6">
+                                    <small class="text-muted">Purchase Price:</small><br>
+                                    <strong id="depPurchasePrice">-</strong>
+                                </div>
+                                <div class="col-6">
+                                    <small class="text-muted">Car Age:</small><br>
+                                    <strong id="depCarAge">-</strong>
+                                </div>
+                            </div>
+                            
+                            <div class="row mb-3">
+                                <div class="col-6">
+                                    <small class="text-muted">Annual Mileage:</small><br>
+                                    <strong id="depAnnualKm">-</strong>
+                                </div>
+                                <div class="col-6">
+                                    <small class="text-muted">Current Mileage:</small><br>
+                                    <strong id="depCurrentKm">-</strong>
+                                </div>
+                            </div>
+                            
+                            <hr>
+                            
+                            <div class="mb-3">
+                                <h5 class="text-success mb-2">
+                                    <i class="bi bi-cash-stack"></i> Estimated Value
+                                </h5>
+                                <h3 class="mb-0" id="depEstimatedValue">-</h3>
+                            </div>
+                            
+                            <div class="row small">
+                                <div class="col-6">
+                                    <span class="text-muted">Age Depreciation:</span><br>
+                                    <strong id="depAgeAmount">-</strong>
+                                    <span class="text-muted">(<span id="depAgePercent">-</span>%)</span>
+                                </div>
+                                <div class="col-6">
+                                    <span class="text-muted">Mileage Depreciation:</span><br>
+                                    <strong id="depMileageAmount">-</strong>
+                                    <span class="text-muted">(<span id="depMileagePercent">-</span>%)</span>
+                                </div>
+                            </div>
+                            
+                            <div class="mt-3 small">
+                                <span class="text-muted">Total Depreciation:</span><br>
+                                <strong id="depTotalAmount">-</strong>
+                                <span class="text-muted">(<span id="depTotalPercent">-</span>%)</span>
+                            </div>
+                        </div>
+                        
+                        <!-- Comparison with Trade-In Value -->
+                        <div id="depComparison" class="alert alert-warning" style="display: none;">
+                            <h6><i class="bi bi-arrow-left-right"></i> Comparison</h6>
+                            <p class="mb-0 small" id="depComparisonText"></p>
+                        </div>
+                        
+                        <!-- Depreciation Curve Chart -->
+                        <div class="mt-3">
+                            <h6 class="mb-2"><i class="bi bi-graph-down-arrow"></i> Value Over Time</h6>
+                            <canvas id="depreciationChart" style="max-height: 300px;"></canvas>
+                        </div>
+                        
+                        <div class="alert alert-info mt-3 small mb-0">
+                            <i class="bi bi-info-circle"></i> 
+                            <strong>Note:</strong> This is an estimate based on typical depreciation patterns. 
+                            Actual value depends on condition, market demand, and maintenance history.
+                        </div>
+                    </div>
+                    
+                    <div id="depreciationError" class="alert alert-danger" style="display: none;"></div>
+                </div>
+            </div>
+            
+            <!-- Help Section -->
+            <div class="card mt-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-question-circle"></i> How to Get Your Car's Value</h5>
+                </div>
+                <div class="card-body">
+                    <h6>Online Valuation Tools:</h6>
+                    <ul>
+                        <li><a href="https://www.autoscout24.nl/auto-verkopen/" target="_blank">AutoScout24 Valuation</a></li>
+                    </ul>
+                    
+                    <h6 class="mt-3">Tips:</h6>
+                    <ul class="mb-0">
+                        <li>Use the calculator above for a quick estimate</li>
+                        <li>Check AutoScout24 for current market data</li>
+                        <li>Consider current condition and any damage</li>
+                        <li>Be conservative - use the lower estimate</li>
+                        <li>Update regularly as mileage increases</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="alert alert-warning">
+        <h5><i class="bi bi-exclamation-triangle"></i> No Current Car Configured</h5>
+        <p>Please configure your current car in the configuration file first.</p>
+        <p class="mb-0">Edit <code>config/config.yaml</code> and set the <code>current_car.license_plate</code> value.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+// Trade-In Value Form Submission
+document.getElementById('updateTradeInForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const form = e.target;
+    const messageDiv = document.getElementById('updateMessage');
+    const submitButton = form.querySelector('button[type="submit"]');
+    
+    // Get form data
+    const selling_price = parseFloat(document.getElementById('selling_price').value);
+    const mileage_km = parseInt(document.getElementById('mileage_km').value);
+    
+    // Validate
+    if (!selling_price || !mileage_km) {
+        messageDiv.className = 'alert alert-danger';
+        messageDiv.textContent = 'Please fill in all fields';
+        messageDiv.style.display = 'block';
+        return;
+    }
+    
+    // Disable button during submission
+    submitButton.disabled = true;
+    submitButton.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Updating...';
+    
+    try {
+        const response = await fetch('/api/trade-in-value', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                selling_price: selling_price,
+                mileage_km: mileage_km
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            messageDiv.className = 'alert alert-success';
+            messageDiv.innerHTML = '<i class="bi bi-check-circle"></i> ' + data.message;
+            messageDiv.style.display = 'block';
+            
+            // Reload page after 1.5 seconds to show updated history
+            setTimeout(() => {
+                window.location.reload();
+            }, 1500);
+        } else {
+            messageDiv.className = 'alert alert-danger';
+            messageDiv.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Error: ' + data.message;
+            messageDiv.style.display = 'block';
+            submitButton.disabled = false;
+            submitButton.innerHTML = '<i class="bi bi-check-circle"></i> Update Trade-In Value';
+        }
+    } catch (error) {
+        messageDiv.className = 'alert alert-danger';
+        messageDiv.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Error: ' + error.message;
+        messageDiv.style.display = 'block';
+        submitButton.disabled = false;
+        submitButton.innerHTML = '<i class="bi bi-check-circle"></i> Update Trade-In Value';
+    }
+});
+
+// Mileage Update Handler
+document.getElementById('updateMileageBtn')?.addEventListener('click', async function() {
+    const button = this;
+    const mileageInput = document.getElementById('calculatorMileage');
+    const statusDiv = document.getElementById('mileageUpdateStatus');
+    const mileage_km = mileageInput.value;
+    
+    // Validate input
+    if (!mileage_km || mileage_km <= 0) {
+        statusDiv.className = 'alert alert-warning';
+        statusDiv.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Please enter a valid mileage';
+        statusDiv.style.display = 'block';
+        return;
+    }
+    
+    // Disable button and show loading
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+    statusDiv.style.display = 'none';
+    
+    try {
+        const response = await fetch('/api/update-mileage', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                mileage_km: parseInt(mileage_km)
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            statusDiv.className = 'alert alert-success';
+            statusDiv.innerHTML = '<i class="bi bi-check-circle"></i> ' + data.message;
+            statusDiv.style.display = 'block';
+            
+            // Auto-recalculate depreciation if results are visible
+            const resultsDiv = document.getElementById('depreciationResults');
+            if (resultsDiv.style.display !== 'none') {
+                setTimeout(() => {
+                    document.getElementById('calculateDepreciationBtn').click();
+                }, 500);
+            }
+        } else {
+            statusDiv.className = 'alert alert-danger';
+            statusDiv.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Error: ' + data.message;
+            statusDiv.style.display = 'block';
+        }
+    } catch (error) {
+        statusDiv.className = 'alert alert-danger';
+        statusDiv.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Error: ' + error.message;
+        statusDiv.style.display = 'block';
+    } finally {
+        button.disabled = false;
+        button.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Update';
+    }
+});
+
+// Depreciation Calculator
+let depreciationChart = null;
+
+document.getElementById('calculateDepreciationBtn')?.addEventListener('click', async function() {
+    const button = this;
+    const resultsDiv = document.getElementById('depreciationResults');
+    const errorDiv = document.getElementById('depreciationError');
+    
+    // Hide previous results/errors
+    resultsDiv.style.display = 'none';
+    errorDiv.style.display = 'none';
+    
+    // Disable button and show loading
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Calculating...';
+    
+    try {
+        const response = await fetch('/api/calculate-depreciation');
+        const data = await response.json();
+        
+        if (response.ok) {
+            // Extract data from API response
+            const car = data.car;
+            const depreciation = data.depreciation;
+            
+            // Update car info
+            document.getElementById('depPurchasePrice').textContent = '€' + car.purchase_price.toLocaleString();
+            document.getElementById('depCarAge').textContent = depreciation.age_years.toFixed(1) + ' years';
+            document.getElementById('depAnnualKm').textContent = depreciation.actual_km_per_year.toLocaleString() + ' km/year';
+            document.getElementById('depCurrentKm').textContent = car.current_mileage.toLocaleString() + ' km';
+            
+            // Update estimated value
+            document.getElementById('depEstimatedValue').textContent = '€' + Math.round(depreciation.estimated_value).toLocaleString();
+            
+            // Update depreciation breakdown
+            const totalDepAmount = depreciation.total_depreciation_amount;
+            const depPercent = depreciation.depreciation_percentage;
+            
+            // Calculate age-based depreciation using compound depreciation (time only)
+            // Value with only time depreciation = purchase_price * (1 - time_rate)^age
+            const valueWithTimeOnly = car.purchase_price * Math.pow(1 - depreciation.time_depreciation_rate, depreciation.age_years);
+            const ageDepAmount = car.purchase_price - valueWithTimeOnly;
+            const ageDepPercent = (ageDepAmount / car.purchase_price) * 100;
+            
+            // Mileage depreciation is the additional depreciation from mileage penalty
+            const mileageDepAmount = totalDepAmount - ageDepAmount;
+            const mileageDepPercent = (mileageDepAmount / car.purchase_price) * 100;
+            
+            document.getElementById('depAgeAmount').textContent = '€' + Math.round(ageDepAmount).toLocaleString();
+            document.getElementById('depAgePercent').textContent = ageDepPercent.toFixed(1);
+            
+            document.getElementById('depMileageAmount').textContent = '€' + Math.round(mileageDepAmount).toLocaleString();
+            document.getElementById('depMileagePercent').textContent = mileageDepPercent.toFixed(1);
+            
+            document.getElementById('depTotalAmount').textContent = '€' + Math.round(totalDepAmount).toLocaleString();
+            document.getElementById('depTotalPercent').textContent = depPercent.toFixed(1);
+            
+            // Show comparison if trade-in value exists
+            const currentTradeInValue = {{ current_trade_in_value if current_trade_in_value else 'null' }};
+            if (currentTradeInValue !== null) {
+                const comparisonDiv = document.getElementById('depComparison');
+                const comparisonText = document.getElementById('depComparisonText');
+                const difference = Math.round(depreciation.estimated_value) - currentTradeInValue;
+                const percentDiff = ((difference / currentTradeInValue) * 100).toFixed(1);
+                
+                if (Math.abs(difference) < 500) {
+                    comparisonDiv.className = 'alert alert-success';
+                    comparisonText.innerHTML = `<strong>Close match!</strong> Your trade-in value (€${currentTradeInValue.toLocaleString()}) is very close to the calculated estimate.`;
+                } else if (difference > 0) {
+                    comparisonDiv.className = 'alert alert-info';
+                    comparisonText.innerHTML = `The calculated estimate is <strong>€${Math.abs(difference).toLocaleString()} higher</strong> (${percentDiff}%) than your current trade-in value (€${currentTradeInValue.toLocaleString()}). Your actual market value may be underestimated.`;
+                } else {
+                    comparisonDiv.className = 'alert alert-warning';
+                    comparisonText.innerHTML = `Your trade-in value (€${currentTradeInValue.toLocaleString()}) is <strong>€${Math.abs(difference).toLocaleString()} higher</strong> (${Math.abs(percentDiff)}%) than the calculated estimate. This could indicate favorable market conditions or excellent car condition.`;
+                }
+                comparisonDiv.style.display = 'block';
+            }
+            
+            // Draw depreciation chart
+            drawDepreciationChart(depreciation.depreciation_curve, car.purchase_price, currentTradeInValue);
+            
+            // Show results
+            resultsDiv.style.display = 'block';
+            
+        } else {
+            errorDiv.textContent = data.message || 'Failed to calculate depreciation';
+            errorDiv.style.display = 'block';
+        }
+    } catch (error) {
+        errorDiv.textContent = 'Error: ' + error.message;
+        errorDiv.style.display = 'block';
+    } finally {
+        button.disabled = false;
+        button.innerHTML = '<i class="bi bi-calculator"></i> Calculate Estimated Value';
+    }
+});
+
+function drawDepreciationChart(curveData, purchasePrice, tradeInValue) {
+    const ctx = document.getElementById('depreciationChart').getContext('2d');
+    
+    // Destroy existing chart if it exists
+    if (depreciationChart) {
+        depreciationChart.destroy();
+    }
+    
+    // Prepare data points from API response
+    const labels = curveData.map(point => point.year.toString());
+    const values = curveData.map(point => Math.round(point.estimated_value));
+    
+    // Find current point - it's the last point before is_future becomes true
+    let currentIndex = -1;
+    for (let i = 0; i < curveData.length; i++) {
+        if (curveData[i].is_future) {
+            currentIndex = i - 1;
+            break;
+        }
+    }
+    // If no future point found, current is the last point
+    if (currentIndex === -1) {
+        currentIndex = curveData.length - 1;
+    }
+    
+    // Create datasets
+    const datasets = [
+        {
+            label: 'Estimated Value',
+            data: values,
+            borderColor: 'rgb(75, 192, 192)',
+            backgroundColor: 'rgba(75, 192, 192, 0.1)',
+            tension: 0.3,
+            fill: true,
+            pointRadius: 4,
+            pointHoverRadius: 6
+        }
+    ];
+    
+    // Add current point marker
+    if (currentIndex !== -1) {
+        const currentPointData = Array(curveData.length).fill(null);
+        currentPointData[currentIndex] = values[currentIndex];
+        datasets.push({
+            label: 'Current Value',
+            data: currentPointData,
+            borderColor: 'rgb(255, 159, 64)',
+            backgroundColor: 'rgb(255, 159, 64)',
+            pointRadius: 8,
+            pointStyle: 'circle',
+            showLine: false
+        });
+    }
+    
+    // Add trade-in value line if it exists
+    if (tradeInValue !== null) {
+        datasets.push({
+            label: 'Trade-In Value',
+            data: Array(curveData.length).fill(tradeInValue),
+            borderColor: 'rgb(153, 102, 255)',
+            borderDash: [5, 5],
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false
+        });
+    }
+    
+    // Create chart
+    depreciationChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'bottom'
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label || '';
+                            if (label) {
+                                label += ': ';
+                            }
+                            if (context.parsed.y !== null) {
+                                label += '€' + Math.round(context.parsed.y).toLocaleString();
+                            }
+                            return label;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: false,
+                    ticks: {
+                        callback: function(value) {
+                            return '€' + Math.round(value).toLocaleString();
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)'
+                    }
+                },
+                x: {
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)'
+                    }
+                }
+            }
+        }
+    });
+}
+</script>
+{% endblock %}
