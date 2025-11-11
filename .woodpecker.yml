@@ -59,3 +59,4 @@ steps:
       - flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
       - echo "Checking code formatting with black..."
       - black --check . || echo "Code formatting check completed"
+# CI test trigger
