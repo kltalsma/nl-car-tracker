@@ -1,0 +1,11 @@
+[
+  {
+    "name": "PLACEHOLDER",
+    "value": "PLACEHOLDER",
+    "domain": ".autotrack.nl",
+    "path": "/",
+    "expires": 1735689600,
+    "httpOnly": false,
+    "secure": true
+  }
+]

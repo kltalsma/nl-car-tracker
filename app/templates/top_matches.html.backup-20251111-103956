@@ -1,0 +1,385 @@
+{% extends "base.html" %}
+{% from "components/unified_sidebar.html" import render_sidebar %}
+
+{% block title %}Top Matches - NL Car Tracker{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <!-- Unified Sidebar -->
+        <div class="col-md-3">
+            {{ render_sidebar(config, user_reqs=None, stats=None, available_makes=available_makes, available_models=available_models, request_args=request.args, trade_in_value=trade_in_value, show_filters=True) }}
+        </div>
+
+        <!-- Main content -->
+        <div class="col-md-9">
+            <h3 class="mb-4"><i class="bi bi-star-fill text-warning"></i> Top Matches</h3>
+            <p class="lead">Top 3 cars per fuel type, scored by price, odometer, range, and age</p>
+            
+            <div class="alert alert-info">
+                <strong>Value Rating:</strong> Cars are scored 0-100% based on best value for money, considering price (40%), mileage (30%), age (20%), and range (10%). 
+                Higher percentages = better deals. Critical features like trekhaak and hill hold are highlighted below.
+            </div>
+
+    {% if heerenveen_by_fuel or cars_by_fuel %}
+        {% for fuel_type in ['BEV', 'PHEV'] %}
+            {% set heerenveen_cars = heerenveen_by_fuel.get(fuel_type, []) %}
+            {% set top_cars = cars_by_fuel.get(fuel_type, []) %}
+            
+            {% if heerenveen_cars or top_cars %}
+            <div class="mb-5">
+                <h3 class="mb-3">
+                    <span class="badge bg-primary">{{ fuel_type }}</span>
+                </h3>
+                
+                <!-- Heerenveen Matches Section -->
+                {% if heerenveen_cars %}
+                <div class="mb-4">
+                    <h5 class="mb-3">
+                        <i class="bi bi-geo-alt-fill text-success"></i> Heerenveen Matches (Lenient Filtering)
+                    </h5>
+                    <div class="alert alert-secondary">
+                        <small>
+                            <strong>Filters applied:</strong> Year ≥2020, Price ≤€35,000, Mileage ≤150,000km, Distance ≤30km from Heerenveen<br>
+                            <strong>Ignored:</strong> Make/model preferences, storage capacity, doors/seats, family car requirements
+                        </small>
+                    </div>
+                    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
+                        {% for car in heerenveen_cars %}
+                        <div class="col">
+                            <div class="card car-card h-100">
+                                <div class="card-body">
+                                    <div class="mb-2">
+                                        {% set car_critical = critical_features_info.get(car.id, {}) %}
+                                        {% set missing_critical_count = car_critical.values() | reject | list | length %}
+                                        
+                                        {% if missing_critical_count == 0 %}
+                                        <span class="badge badge-perfect">
+                                            <i class="bi bi-check-circle-fill"></i> All Critical Features
+                                        </span>
+                                        {% else %}
+                                        <span class="badge bg-warning text-dark">
+                                            <i class="bi bi-exclamation-triangle-fill"></i> Missing {{ missing_critical_count }} Critical
+                                        </span>
+                                        {% endif %}
+                                        
+                                        {% if car.value_rating is defined and car.value_rating is not none %}
+                                        <span class="badge {% if car.value_rating >= 90 %}bg-success{% elif car.value_rating >= 80 %}bg-info{% elif car.value_rating >= 70 %}bg-primary{% elif car.value_rating >= 60 %}bg-warning text-dark{% else %}bg-secondary{% endif %} ms-1">
+                                            <i class="bi bi-star-fill"></i> Value: {{ car.value_rating }}%
+                                        </span>
+                                        {% endif %}
+                                    </div>
+                                    <h5 class="card-title">{{ car.make }} {{ car.model }}</h5>
+                                    <p class="card-text">
+                                        <small class="text-muted">{{ car.year }} • {{ car.fuel_type }}</small>
+                                        {% if car.is_preferred %}
+                                        <span class="badge bg-success text-white"><i class="bi bi-star-fill"></i> PREFERRED</span>
+                                        {% endif %}
+                                    </p>
+                                    <div class="price-tag mb-2">{{ car.price | format_price }}</div>
+                                    
+                                    {% if trade_in_value %}
+                                    <div class="mb-2" style="background-color: #d1f2eb; border-left: 3px solid #28a745; padding: 8px; border-radius: 4px;">
+                                        <small><i class="bi bi-cash-stack text-success"></i> <strong>Net cost: €{{ "{:,}".format(car.price - trade_in_value) }}</strong></small><br>
+                                        <small class="text-muted">(after €{{ "{:,}".format(trade_in_value) }} trade-in)</small>
+                                    </div>
+                                    {% endif %}
+                                    
+                                    <p class="mb-2">
+                                        <small>
+                                            <i class="bi bi-speedometer"></i> {{ car.mileage_km | format_mileage }}<br>
+                                            {% set primary_range = car.ad_listed_range_km or car.electric_range_km or car.range_km %}
+                                            {% if primary_range %}
+                                            <i class="bi bi-battery-charging"></i> 
+                                            {% if car.fuel_type == 'PHEV' %}
+                                                {{ primary_range }} km electric
+                                                {% if primary_range < 40 %}
+                                                <span class="badge bg-warning text-dark" title="Low electric range">⚠️ Low</span>
+                                                {% endif %}
+                                            {% else %}
+                                                <div class="small">
+                                                    {% if car.battery_size %}
+                                                        <strong>Battery:</strong> {{ car.battery_size }} kWh<br>
+                                                    {% endif %}
+                                                    {% set ad_range = car.electric_range_km or car.ad_listed_range_km %}
+                                                    {% if ad_range %}
+                                                    <strong>Listed in ad:</strong> {{ ad_range }} km<br>
+                                                    {% endif %}
+                                                    <strong>WLTP:</strong> 
+                                                    {% if car.wltp_reference_range_km %}
+                                                        {{ car.wltp_reference_range_km }} km
+                                                        {% if ad_range and car.wltp_reference_range_km < ad_range * 0.85 %}
+                                                        <span class="badge bg-warning text-dark ms-1" title="WLTP unusually low - may indicate inflated ad listing">⚠️</span>
+                                                        {% endif %}
+                                                    {% elif car.wltp_range %}
+                                                        {{ car.wltp_range }} km
+                                                    {% else %}
+                                                        <span class="text-muted">-</span>
+                                                    {% endif %}
+                                                    <br>
+                                                    <strong>EV-Database:</strong> 
+                                                    {% if car.ev_db_range %}
+                                                        {{ car.ev_db_range.real_range|int }} km real-world (City: {{ car.ev_db_range.city_mild|int }} km, Highway: {{ car.ev_db_range.highway_mild|int }} km)
+                                                    {% else %}
+                                                        <span class="text-muted">-</span>
+                                                    {% endif %}
+                                                    <br>
+                                                    <strong>Towing (750-1000kg tent trailer):</strong> 
+                                                    {% if car.towing_range %}
+                                                        <span data-bs-toggle="tooltip" data-bs-placement="top" title="Based on {{ car.towing_range.source }}">
+                                                            ~{{ car.towing_range.estimated_range_km|int }} km highway
+                                                        </span>
+                                                    {% else %}
+                                                        <span class="text-muted">-</span>
+                                                    {% endif %}
+                                                </div>
+                                            {% endif %}
+                                            <br>
+                                            {% endif %}
+                                            <i class="bi bi-geo-alt-fill text-success"></i> 
+                                            {% if car.location_city %}
+                                                <strong>{{ car.location_city }}</strong>
+                                                {% if car.distance_from_heerenveen_km %}
+                                                    <span class="text-muted">({{ car.distance_from_heerenveen_km | format_distance }} drive)</span>
+                                                {% endif %}
+                                            {% elif car.distance_from_heerenveen_km %}
+                                                <strong>{{ car.distance_from_heerenveen_km | format_distance }}</strong> from Heerenveen
+                                            {% endif %}
+                                            <br>
+                                            <i class="bi bi-briefcase-fill"></i> 
+                                            {% if car.storage_capacity_liters %}
+                                                {{ car.storage_capacity_liters }}L{% if car.storage_capacity_seats_down_liters %} / {{ car.storage_capacity_seats_down_liters }}L{% endif %} boot
+                                            {% else %}
+                                                <span class="text-muted">Could not be determined</span>
+                                            {% endif %}
+                                        </small>
+                                    </p>
+                                    
+                                    <!-- Critical Features Status -->
+                                    <div class="mb-3">
+                                        <strong class="d-block mb-1"><small>Critical Features:</small></strong>
+                                        {% for feature, has_it in car_critical.items() %}
+                                        <span class="badge {% if has_it %}bg-success{% else %}bg-danger{% endif %} me-1 mb-1" style="font-size: 0.7rem;">
+                                            {% if has_it %}
+                                            <i class="bi bi-check-lg"></i>
+                                            {% else %}
+                                            <i class="bi bi-x-lg"></i>
+                                            {% endif %}
+                                            {{ feature }}
+                                        </span>
+                                        {% endfor %}
+                                    </div>
+                                    
+                                    <div class="d-grid gap-2 mt-3">
+                                        <a href="/car/{{ car.id }}" class="btn btn-primary btn-sm">
+                                            <i class="bi bi-info-circle"></i> View Details
+                                        </a>
+                                        <a href="{{ car.listing_url }}" target="_blank" class="btn btn-outline-secondary btn-sm">
+                                            <i class="bi bi-box-arrow-up-right"></i> View on {{ car.source_website }}
+                                        </a>
+                                    </div>
+                                </div>
+                                <div class="card-footer">
+                                    <small class="text-muted">
+                                        Last seen: {{ car.last_seen | format_datetime }}
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+                
+                <!-- Top Matches Section (Strict Filtering) -->
+                {% if top_cars %}
+                <div class="mb-4">
+                    <h5 class="mb-3">
+                        <i class="bi bi-star-fill text-warning"></i> Top Matches (Strict Filtering)
+                    </h5>
+                    <div class="alert alert-secondary">
+                        <small>
+                            <strong>All filters applied:</strong> Including make/model preferences, storage capacity, doors/seats, family car requirements
+                        </small>
+                    </div>
+                    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
+                        {% for car in top_cars %}
+                        <div class="col">
+                            <div class="card car-card h-100">
+                                <div class="card-body">
+                                    <div class="mb-2">
+                                        {% set car_critical = critical_features_info.get(car.id, {}) %}
+                                        {% set missing_critical_count = car_critical.values() | reject | list | length %}
+                                        
+                                        {% if missing_critical_count == 0 %}
+                                        <span class="badge badge-perfect">
+                                            <i class="bi bi-check-circle-fill"></i> All Critical Features
+                                        </span>
+                                        {% else %}
+                                        <span class="badge bg-warning text-dark">
+                                            <i class="bi bi-exclamation-triangle-fill"></i> Missing {{ missing_critical_count }} Critical
+                                        </span>
+                                        {% endif %}
+                                        
+                                        {% if car.value_rating is defined and car.value_rating is not none %}
+                                        <span class="badge {% if car.value_rating >= 90 %}bg-success{% elif car.value_rating >= 80 %}bg-info{% elif car.value_rating >= 70 %}bg-primary{% elif car.value_rating >= 60 %}bg-warning text-dark{% else %}bg-secondary{% endif %} ms-1">
+                                            <i class="bi bi-star-fill"></i> Value: {{ car.value_rating }}%
+                                        </span>
+                                        {% endif %}
+                                    </div>
+                                    <h5 class="card-title">{{ car.make }} {{ car.model }}</h5>
+                                    <p class="card-text">
+                                        <small class="text-muted">{{ car.year }} • {{ car.fuel_type }}</small>
+                                        {% if car.is_preferred %}
+                                        <span class="badge bg-success text-white"><i class="bi bi-star-fill"></i> PREFERRED</span>
+                                        {% endif %}
+                                    </p>
+                                    <div class="price-tag mb-2">{{ car.price | format_price }}</div>
+                                    
+                                    {% if trade_in_value %}
+                                    <div class="mb-2" style="background-color: #d1f2eb; border-left: 3px solid #28a745; padding: 8px; border-radius: 4px;">
+                                        <small><i class="bi bi-cash-stack text-success"></i> <strong>Net cost: €{{ "{:,}".format(car.price - trade_in_value) }}</strong></small><br>
+                                        <small class="text-muted">(after €{{ "{:,}".format(trade_in_value) }} trade-in)</small>
+                                    </div>
+                                    {% endif %}
+                                    
+                                    <p class="mb-2">
+                                        <small>
+                                            <i class="bi bi-speedometer"></i> {{ car.mileage_km | format_mileage }}<br>
+                                            {% set primary_range = car.ad_listed_range_km or car.electric_range_km or car.range_km %}
+                                            {% if primary_range %}
+                                            <i class="bi bi-battery-charging"></i> 
+                                            {% if car.fuel_type == 'PHEV' %}
+                                                {{ primary_range }} km electric
+                                                {% if primary_range < 40 %}
+                                                <span class="badge bg-warning text-dark" title="Low electric range">⚠️ Low</span>
+                                                {% endif %}
+                                            {% else %}
+                                                <div class="small">
+                                                    {% if car.battery_size %}
+                                                        <strong>Battery:</strong> {{ car.battery_size }} kWh<br>
+                                                    {% endif %}
+                                                    {% set ad_range = car.electric_range_km or car.ad_listed_range_km %}
+                                                    {% if ad_range %}
+                                                    <strong>Listed in ad:</strong> {{ ad_range }} km<br>
+                                                    {% endif %}
+                                                    <strong>WLTP:</strong> 
+                                                    {% if car.wltp_reference_range_km %}
+                                                        {{ car.wltp_reference_range_km }} km
+                                                        {% if ad_range and car.wltp_reference_range_km < ad_range * 0.85 %}
+                                                        <span class="badge bg-warning text-dark ms-1" title="WLTP unusually low - may indicate inflated ad listing">⚠️</span>
+                                                        {% endif %}
+                                                    {% elif car.wltp_range %}
+                                                        {{ car.wltp_range }} km
+                                                    {% else %}
+                                                        <span class="text-muted">-</span>
+                                                    {% endif %}
+                                                    <br>
+                                                    <strong>EV-Database:</strong> 
+                                                    {% if car.ev_db_range %}
+                                                        {{ car.ev_db_range.real_range|int }} km real-world (City: {{ car.ev_db_range.city_mild|int }} km, Highway: {{ car.ev_db_range.highway_mild|int }} km)
+                                                    {% else %}
+                                                        <span class="text-muted">-</span>
+                                                    {% endif %}
+                                                    <br>
+                                                    <strong>Towing (750-1000kg tent trailer):</strong> 
+                                                    {% if car.towing_range %}
+                                                        <span data-bs-toggle="tooltip" data-bs-placement="top" title="Based on {{ car.towing_range.source }}">
+                                                            ~{{ car.towing_range.estimated_range_km|int }} km highway
+                                                        </span>
+                                                    {% else %}
+                                                        <span class="text-muted">-</span>
+                                                    {% endif %}
+                                                </div>
+                                            {% endif %}
+                                            <br>
+                                            {% endif %}
+                                            <i class="bi bi-geo-alt-fill text-success"></i> 
+                                            {% if car.location_city %}
+                                                <strong>{{ car.location_city }}</strong>
+                                                {% if car.distance_from_heerenveen_km %}
+                                                    <span class="text-muted">({{ car.distance_from_heerenveen_km | format_distance }} drive)</span>
+                                                {% endif %}
+                                            {% elif car.distance_from_heerenveen_km %}
+                                                <strong>{{ car.distance_from_heerenveen_km | format_distance }}</strong> from Heerenveen
+                                            {% endif %}
+                                            <br>
+                                            <i class="bi bi-briefcase-fill"></i> 
+                                            {% if car.storage_capacity_liters %}
+                                                {{ car.storage_capacity_liters }}L{% if car.storage_capacity_seats_down_liters %} / {{ car.storage_capacity_seats_down_liters }}L{% endif %} boot
+                                            {% else %}
+                                                <span class="text-muted">Could not be determined</span>
+                                            {% endif %}
+                                        </small>
+                                    </p>
+                                    
+                                    <!-- Critical Features Status -->
+                                    <div class="mb-3">
+                                        <strong class="d-block mb-1"><small>Critical Features:</small></strong>
+                                        {% for feature, has_it in car_critical.items() %}
+                                        <span class="badge {% if has_it %}bg-success{% else %}bg-danger{% endif %} me-1 mb-1" style="font-size: 0.7rem;">
+                                            {% if has_it %}
+                                            <i class="bi bi-check-lg"></i>
+                                            {% else %}
+                                            <i class="bi bi-x-lg"></i>
+                                            {% endif %}
+                                            {{ feature }}
+                                        </span>
+                                        {% endfor %}
+                                    </div>
+                                    
+                                    <div class="d-grid gap-2 mt-3">
+                                        <a href="/car/{{ car.id }}" class="btn btn-primary btn-sm">
+                                            <i class="bi bi-info-circle"></i> View Details
+                                        </a>
+                                        <a href="{{ car.listing_url }}" target="_blank" class="btn btn-outline-secondary btn-sm">
+                                            <i class="bi bi-box-arrow-up-right"></i> View on {{ car.source_website }}
+                                        </a>
+                                    </div>
+                                </div>
+                                <div class="card-footer">
+                                    <small class="text-muted">
+                                        Last seen: {{ car.last_seen | format_datetime }}
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+        {% endfor %}
+    {% else %}
+    <div class="alert alert-warning" role="alert">
+        <i class="bi bi-exclamation-triangle"></i> No perfect matches found yet. Keep checking back as we scrape more listings!
+    </div>
+    {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Initialize Bootstrap tooltips
+    document.addEventListener('DOMContentLoaded', function() {
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+        
+        // Handle make filter change to reload models
+        const makeFilter = document.getElementById('makeFilter');
+        if (makeFilter) {
+            makeFilter.addEventListener('change', function() {
+                // Clear model selection when make changes
+                document.getElementById('modelFilter').value = '';
+                // Submit the form to reload with new make filter
+                document.getElementById('filterForm').submit();
+            });
+        }
+    });
+</script>
+{% endblock %}

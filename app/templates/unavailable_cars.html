@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}Unavailable Cars - T.A.L.S.M.A.-S.C.H.A.A.P.{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-x-circle-fill text-danger"></i> Unavailable Cars</h2>
+            <p class="text-muted">Cars that were tracked but are no longer available for purchase</p>
+        </div>
+    </div>
+
+    <!-- Preferred Unavailable Cars (Most Important) -->
+    {% if preferred_unavailable %}
+    <div class="row mb-5">
+        <div class="col-12">
+            <div class="alert alert-warning">
+                <h4><i class="bi bi-exclamation-triangle-fill"></i> Preferred Cars No Longer Available</h4>
+                <p class="mb-0">These are cars matching your preferred makes/models that have become unavailable.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-5">
+        {% for car in preferred_unavailable %}
+        <div class="col">
+            <div class="card car-card border-warning">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h5 class="card-title mb-0">{{ car.make }} {{ car.model }}</h5>
+                        <span class="badge bg-warning text-dark">PREFERRED</span>
+                    </div>
+                    <p class="text-muted small mb-2">{{ car.year }} • {{ car.fuel_type }}</p>
+                    
+                    <div class="price-tag mb-3">{{ car.price | format_price }}</div>
+                    
+                    <div class="mb-2 small">
+                        <div class="mb-1">
+                            <i class="bi bi-speedometer text-muted"></i> {{ car.mileage_km | format_mileage }}
+                        </div>
+                        {% set primary_range = car.ad_listed_range_km or car.electric_range_km or car.range_km %}
+                        {% if primary_range %}
+                        <div class="mb-1">
+                            <i class="bi bi-battery-charging text-muted"></i> {{ primary_range }} km range
+                        </div>
+                        {% endif %}
+                        <div class="mb-1">
+                            <i class="bi bi-geo-alt-fill text-muted"></i> 
+                            {% if car.location_city %}
+                                {{ car.location_city }}
+                                {% if car.distance_from_heerenveen_km %}
+                                    <span class="text-muted">({{ car.distance_from_heerenveen_km | format_distance }} drive)</span>
+                                {% endif %}
+                            {% elif car.distance_from_heerenveen_km %}
+                                {{ car.distance_from_heerenveen_km | format_distance }} from Heerenveen
+                            {% else %}
+                                Location not available
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-danger py-2 px-3 mb-2">
+                        <small>
+                            <strong>Unavailable:</strong> {{ car.unavailable_reason | replace('_', ' ') | title }}<br>
+                            <strong>Since:</strong> {{ car.marked_unavailable_at | format_datetime }}
+                        </small>
+                    </div>
+                    
+                    <div class="d-grid gap-2 mt-3">
+                        <a href="/car/{{ car.id }}" class="btn btn-outline-primary btn-sm">
+                            <i class="bi bi-info-circle"></i> View Details
+                        </a>
+                        <a href="{{ car.listing_url }}" target="_blank" class="btn btn-outline-secondary btn-sm">
+                            <i class="bi bi-box-arrow-up-right"></i> Check Original Listing
+                        </a>
+                        <button class="btn btn-success btn-sm mark-available-btn" data-car-id="{{ car.id }}">
+                            <i class="bi bi-check-circle"></i> Mark as Available
+                        </button>
+                    </div>
+                </div>
+                <div class="card-footer">
+                    <small class="text-muted">
+                        Last seen: {{ car.last_seen | format_datetime }}
+                    </small>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Other Unavailable Cars -->
+    {% if other_unavailable %}
+    <div class="row mb-3">
+        <div class="col-12">
+            <h4><i class="bi bi-archive-fill text-secondary"></i> Other Unavailable Cars</h4>
+            <p class="text-muted small">Non-preferred cars that are no longer available</p>
+        </div>
+    </div>
+
+    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
+        {% for car in other_unavailable %}
+        <div class="col">
+            <div class="card car-card">
+                <div class="card-body">
+                    <h5 class="card-title mb-2">{{ car.make }} {{ car.model }}</h5>
+                    <p class="text-muted small mb-2">{{ car.year }} • {{ car.fuel_type }}</p>
+                    
+                    <div class="price-tag mb-3">{{ car.price | format_price }}</div>
+                    
+                    <div class="mb-2 small">
+                        <div class="mb-1">
+                            <i class="bi bi-speedometer text-muted"></i> {{ car.mileage_km | format_mileage }}
+                        </div>
+                        {% set primary_range = car.ad_listed_range_km or car.electric_range_km or car.range_km %}
+                        {% if primary_range %}
+                        <div class="mb-1">
+                            <i class="bi bi-battery-charging text-muted"></i> {{ primary_range }} km range
+                        </div>
+                        {% endif %}
+                        <div class="mb-1">
+                            <i class="bi bi-geo-alt-fill text-muted"></i> 
+                            {% if car.location_city %}
+                                {{ car.location_city }}
+                                {% if car.distance_from_heerenveen_km %}
+                                    <span class="text-muted">({{ car.distance_from_heerenveen_km | format_distance }} drive)</span>
+                                {% endif %}
+                            {% elif car.distance_from_heerenveen_km %}
+                                {{ car.distance_from_heerenveen_km | format_distance }} from Heerenveen
+                            {% else %}
+                                Location not available
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-secondary py-2 px-3 mb-2">
+                        <small>
+                            <strong>Unavailable:</strong> {{ car.unavailable_reason | replace('_', ' ') | title }}<br>
+                            <strong>Since:</strong> {{ car.marked_unavailable_at | format_datetime }}
+                        </small>
+                    </div>
+                    
+                    <div class="d-grid gap-2 mt-3">
+                        <a href="/car/{{ car.id }}" class="btn btn-outline-primary btn-sm">
+                            <i class="bi bi-info-circle"></i> View Details
+                        </a>
+                        <a href="{{ car.listing_url }}" target="_blank" class="btn btn-outline-secondary btn-sm">
+                            <i class="bi bi-box-arrow-up-right"></i> Check Original Listing
+                        </a>
+                        <button class="btn btn-success btn-sm mark-available-btn" data-car-id="{{ car.id }}">
+                            <i class="bi bi-check-circle"></i> Mark as Available
+                        </button>
+                    </div>
+                </div>
+                <div class="card-footer">
+                    <small class="text-muted">
+                        Last seen: {{ car.last_seen | format_datetime }}
+                    </small>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Empty State -->
+    {% if not preferred_unavailable and not other_unavailable %}
+    <div class="row">
+        <div class="col-12">
+            <div class="alert alert-success">
+                <h4><i class="bi bi-check-circle-fill"></i> No Unavailable Cars</h4>
+                <p class="mb-0">Great news! All tracked cars are currently available.</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="row mt-5">
+        <div class="col-12 text-center">
+            <a href="/" class="btn btn-primary">
+                <i class="bi bi-arrow-left"></i> Back to Available Cars
+            </a>
+        </div>
+    </div>
+</div>
+
+<script>
+// Handle "Mark as Available" button clicks
+document.querySelectorAll('.mark-available-btn').forEach(button => {
+    button.addEventListener('click', function() {
+        const carId = this.getAttribute('data-car-id');
+        const buttonElement = this;
+        
+        // Disable button and show loading state
+        buttonElement.disabled = true;
+        const originalHTML = buttonElement.innerHTML;
+        buttonElement.innerHTML = '<i class="bi bi-hourglass-split"></i> Processing...';
+        
+        // Make API call to mark car as available
+        fetch(`/api/mark-available/${carId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Show success message
+                buttonElement.innerHTML = '<i class="bi bi-check-circle-fill"></i> Marked!';
+                buttonElement.classList.remove('btn-success');
+                buttonElement.classList.add('btn-outline-success');
+                
+                // Fade out the card and remove after animation
+                const card = buttonElement.closest('.col');
+                card.style.transition = 'opacity 0.5s ease-out';
+                card.style.opacity = '0';
+                
+                setTimeout(() => {
+                    card.remove();
+                    
+                    // Check if no more cars in this section
+                    const preferredSection = document.querySelector('.alert-warning');
+                    const otherSection = document.querySelector('.alert-secondary');
+                    
+                    if (preferredSection && !document.querySelector('.border-warning .mark-available-btn')) {
+                        preferredSection.closest('.row').nextElementSibling.remove();
+                        preferredSection.closest('.row').remove();
+                    }
+                    
+                    // If no more unavailable cars at all, show success message
+                    if (document.querySelectorAll('.mark-available-btn').length === 0) {
+                        location.reload();
+                    }
+                }, 500);
+            } else {
+                // Show error
+                alert('Error: ' + (data.error || 'Failed to mark car as available'));
+                buttonElement.disabled = false;
+                buttonElement.innerHTML = originalHTML;
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Error: Failed to communicate with server');
+            buttonElement.disabled = false;
+            buttonElement.innerHTML = originalHTML;
+        });
+    });
+});
+</script>
+{% endblock %}

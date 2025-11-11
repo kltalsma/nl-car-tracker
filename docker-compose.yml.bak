@@ -1,0 +1,50 @@
+services:
+  # Web dashboard service
+  web:
+    build: .
+    container_name: nl-car-tracker-web
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config.yaml:/app/config.yaml
+      - /var/run/docker.sock:/var/run/docker.sock  # Allow Docker control from container
+      - .:/app/project_root  # Mount project root for docker-compose access
+    environment:
+      - FLASK_ENV=production
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - DISABLE_SCHEDULER=true  # Web container only serves dashboard, scraper container handles scraping
+    command: python app/app.py
+    restart: unless-stopped
+    stop_grace_period: 30s
+    networks:
+      - car-tracker-network
+
+  # Scraper service (continuous background scraping)
+  scraper:
+    build: .
+    container_name: nl-car-tracker-scraper
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config.yaml:/app/config.yaml
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python run_scraper.py
+    restart: unless-stopped
+    stop_grace_period: 30s
+    networks:
+      - car-tracker-network
+    depends_on:
+      - web
+
+volumes:
+  data:
+    driver: local
+  logs:
+    driver: local
+
+networks:
+  car-tracker-network:
+    driver: bridge

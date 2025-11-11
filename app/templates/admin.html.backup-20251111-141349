@@ -1,0 +1,1682 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - NL Car Tracker{% endblock %}
+
+{% block extra_css %}
+<style>
+    .admin-card {
+        border-left: 4px solid #16c79a;
+        margin-bottom: 20px;
+    }
+    .scraper-btn {
+        margin: 5px;
+    }
+    .status-indicator {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 8px;
+    }
+    .status-enabled {
+        background-color: #28a745;
+    }
+    .status-disabled {
+        background-color: #dc3545;
+    }
+    #log-output {
+        max-height: 400px;
+        overflow-y: auto;
+        background-color: #1a1a2e;
+        color: #16c79a;
+        font-family: 'Courier New', monospace;
+        font-size: 0.9rem;
+        padding: 15px;
+        border-radius: 5px;
+    }
+    .log-entry {
+        margin-bottom: 5px;
+    }
+    @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+    .fa-spin {
+        animation: spin 1s linear infinite;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <h1 class="mb-4">
+                <i class="bi bi-gear-fill"></i> Admin Panel
+            </h1>
+        </div>
+    </div>
+
+    <!-- Scraper Statistics -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-graph-up"></i> Scraper Statistics
+                        <button type="button" class="btn btn-sm btn-primary float-end" 
+                                id="refresh-stats-btn" onclick="refreshScraperStatistics()">
+                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                        </button>
+                    </h5>
+                    <div id="scraper-statistics" class="row">
+                        <div class="text-center text-muted p-3">
+                            <i class="bi bi-hourglass-split"></i> Loading statistics...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scheduler Status -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-clock-history"></i> Scheduler Status
+                    </h5>
+                    
+                    <div id="scheduler-loading" class="text-center text-muted p-3">
+                        <i class="bi bi-hourglass-split"></i> Loading scheduler status...
+                    </div>
+                    
+                    <div id="scheduler-config" style="display: none;">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="scheduler-enabled" 
+                                           onchange="updateSchedulerConfig()">
+                                    <label class="form-check-label" for="scheduler-enabled">
+                                        Enable Automatic Scraping
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="scheduler-interval" class="form-label">Interval (minutes):</label>
+                                <input type="number" class="form-control" id="scheduler-interval" 
+                                       min="1" max="1440" onchange="updateSchedulerConfig()">
+                            </div>
+                        </div>
+                        <div class="alert alert-info">
+                            <strong>Next Run:</strong> <span id="next-run-time">Not scheduled</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scraper Trends -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-graph-up-arrow"></i> Scraper Trends
+                    </h5>
+                    
+                    <div class="mb-3">
+                        <label for="trends-website-filter" class="form-label">Filter by Website:</label>
+                        <select class="form-select" id="trends-website-filter" onchange="filterTrends()">
+                            <option value="">All Websites</option>
+                        </select>
+                    </div>
+                    
+                    <div id="trends-loading" class="text-center text-muted p-3">
+                        <i class="bi bi-hourglass-split"></i> Loading trends...
+                    </div>
+                    
+                    <div id="trends-charts" style="display: none;">
+                        <div class="row">
+                            <div class="col-md-6 mb-4">
+                                <h6>Success Rate Over Time</h6>
+                                <canvas id="success-rate-chart"></canvas>
+                            </div>
+                            <div class="col-md-6 mb-4">
+                                <h6>Cars Found Over Time</h6>
+                                <canvas id="cars-found-chart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Availability Check Configuration -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-bell"></i> Availability Check Configuration
+                    </h5>
+                    <p class="text-muted">
+                        Configure when and how to check for newly available cars.
+                    </p>
+                    
+                    <div id="availability-check-status" class="mb-3"></div>
+                    
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Check Interval (minutes):</label>
+                            <input type="number" class="form-control" id="availability-interval" 
+                                   min="1" max="1440" value="15">
+                            <small class="text-muted">How often to check for new cars</small>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Minimum Features Required:</label>
+                            <input type="number" class="form-control" id="availability-min-features" 
+                                   min="0" max="10" value="3">
+                            <small class="text-muted">Minimum critical features to trigger notification</small>
+                        </div>
+                    </div>
+                    
+                    <button type="button" class="btn btn-primary" onclick="updateAvailabilityConfig()">
+                        <i class="bi bi-check-circle"></i> Save Configuration
+                    </button>
+                    
+                    <button type="button" class="btn btn-secondary" onclick="testAvailabilityCheck()">
+                        <i class="bi bi-play-circle"></i> Test Check Now
+                    </button>
+                    
+                    <div class="mt-3">
+                        <strong>Next Check:</strong> <span id="next-check-countdown">Calculating...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Availability History -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-clock-history"></i> Availability Check History
+                    </h5>
+                    
+                    <div id="availability-history">
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>Cars Found</th>
+                                        <th>New Cars</th>
+                                        <th>Notified</th>
+                                        <th>Duration</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="availability-history-list">
+                                    <tr>
+                                        <td colspan="5" class="text-center text-muted">
+                                            <i class="bi bi-hourglass-split"></i> Loading history...
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Exclusions Management -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-x-circle"></i> Exclusions Management
+                        <span class="badge bg-secondary" id="exclusion-count">0</span>
+                    </h5>
+                    <p class="text-muted">
+                        Exclude specific make/model combinations from availability checks.
+                    </p>
+                    
+                    <div id="exclusion-status" class="mb-3"></div>
+                    
+                    <div class="accordion" id="exclusions-accordion">
+                        <!-- Add Exclusion Form -->
+                        <div class="accordion-item">
+                            <h2 class="accordion-header" id="heading-add-exclusion">
+                                <button class="accordion-button" type="button" 
+                                        data-bs-toggle="collapse" data-bs-target="#collapse-add-exclusion" 
+                                        aria-expanded="true" aria-controls="collapse-add-exclusion">
+                                    <i class="bi bi-plus-circle me-2"></i> Add New Exclusion
+                                </button>
+                            </h2>
+                            <div id="collapse-add-exclusion" class="accordion-collapse collapse show" 
+                                 aria-labelledby="heading-add-exclusion" data-bs-parent="#exclusions-accordion">
+                                <div class="accordion-body">
+                                    <div class="row">
+                                        <div class="col-md-5">
+                                            <input type="text" class="form-control" id="exclusion-make" 
+                                                   placeholder="Make (e.g., Toyota)">
+                                        </div>
+                                        <div class="col-md-5">
+                                            <input type="text" class="form-control" id="exclusion-model" 
+                                                   placeholder="Model (e.g., Corolla)">
+                                        </div>
+                                        <div class="col-md-2">
+                                            <button type="button" class="btn btn-primary w-100" onclick="addExclusion()">
+                                                <i class="bi bi-plus-circle"></i> Add
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Current Exclusions List -->
+                        <div class="accordion-item">
+                            <h2 class="accordion-header" id="heading-exclusion-list">
+                                <button class="accordion-button collapsed" type="button" 
+                                        data-bs-toggle="collapse" data-bs-target="#collapse-exclusion-list" 
+                                        aria-expanded="false" aria-controls="collapse-exclusion-list">
+                                    <i class="bi bi-list-ul me-2"></i> Current Exclusions 
+                                    <span class="badge bg-secondary ms-2" id="exclusion-count-accordion">0</span>
+                                </button>
+                            </h2>
+                            <div id="collapse-exclusion-list" class="accordion-collapse collapse" 
+                                 aria-labelledby="heading-exclusion-list" data-bs-parent="#exclusions-accordion">
+                                <div class="accordion-body p-0">
+                                    <div class="table-responsive">
+                                        <table class="table table-striped mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th>Make</th>
+                                                    <th>Model</th>
+                                                    <th>Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="exclusion-list">
+                                                <tr>
+                                                    <td colspan="3" class="text-center text-muted">
+                                                        <i class="bi bi-hourglass-split"></i> Loading exclusions...
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+    </div>
+
+    <!-- Critical Features Configuration -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-star"></i> Critical Features Configuration
+                    </h5>
+                    <p class="text-muted">
+                        Define which features are important for car availability notifications.
+                    </p>
+                    
+                    <div id="tier-descriptions" class="alert alert-info mb-3" style="display: none;"></div>
+                    <div id="min-features-note" class="alert alert-warning mb-3" style="display: none;"></div>
+                    
+                    <div id="critical-features-status" class="mb-3"></div>
+                    
+                    <div class="accordion" id="critical-features-accordion">
+                        <div class="text-center text-muted p-3">
+                            <i class="bi bi-hourglass-split"></i> Loading features...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Website Configurations -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-globe"></i> Website Configurations
+                    </h5>
+                    <div id="website-configs" class="row">
+                        <div class="text-center text-muted p-3">
+                            <i class="bi bi-hourglass-split"></i> Loading configurations...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manual Scrape Trigger -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-play-circle"></i> Manual Scrape Trigger
+                    </h5>
+                    <p class="text-muted">
+                        Manually trigger a scraping job for all configured websites.
+                    </p>
+                    
+                    <div id="scrape-status" class="mb-3"></div>
+                    
+                    <button type="button" class="btn btn-success" onclick="triggerScraper('all')">
+                        <i class="bi bi-play-fill"></i> Trigger Scrape Now
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Management -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-people-fill"></i> User Management
+                        <button type="button" class="btn btn-sm btn-success float-end" 
+                                onclick="showCreateUserModal()">
+                            <i class="bi bi-person-plus"></i> Create User
+                        </button>
+                    </h5>
+                    <p class="text-muted">
+                        Manage user accounts and permissions.
+                    </p>
+                    
+                    <div id="user-management-status" class="mb-3"></div>
+                    
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Username</th>
+                                    <th>Admin</th>
+                                    <th>Active</th>
+                                    <th>Last Login</th>
+                                    <th>Created</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="users-table-body">
+                                <tr>
+                                    <td colspan="6" class="text-center text-muted">
+                                        <i class="bi bi-hourglass-split"></i> Loading users...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Logs Viewer -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-file-text"></i> Logs Viewer
+                    </h5>
+                    
+                    <div class="mb-3">
+                        <button type="button" class="btn btn-sm btn-primary" onclick="loadLogs('app')">
+                            <i class="bi bi-file-earmark-text"></i> App Logs
+                        </button>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="loadLogs('scraper')">
+                            <i class="bi bi-file-earmark-code"></i> Scraper Logs
+                        </button>
+                        <button type="button" class="btn btn-sm btn-info" onclick="clearLogs()">
+                            <i class="bi bi-x-circle"></i> Clear Display
+                        </button>
+                    </div>
+                    
+                    <div class="log-container">
+                        <pre id="log-output" class="mb-0">Click a button above to load logs...</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create/Edit User Modal -->
+<div class="modal fade" id="userModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="userModalTitle">Create User</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="userForm">
+                    <input type="hidden" id="userId">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">Username</label>
+                        <input type="text" class="form-control" id="username" required>
+                    </div>
+                    <div class="mb-3" id="passwordGroup">
+                        <label for="password" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="password">
+                        <small class="text-muted" id="passwordHelp">Leave empty to keep current password</small>
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="isAdmin">
+                            <label class="form-check-label" for="isAdmin">
+                                Administrator
+                            </label>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="isActive" checked>
+                            <label class="form-check-label" for="isActive">
+                                Active
+                            </label>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveUser()">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+    function addLogEntry(message, type = 'info') {
+        const logOutput = document.getElementById('log-output');
+        const timestamp = new Date().toLocaleTimeString();
+        const icon = type === 'error' ? 'bi-x-circle' : type === 'success' ? 'bi-check-circle' : 'bi-info-circle';
+        const color = type === 'error' ? 'text-danger' : type === 'success' ? 'text-success' : 'text-info';
+        
+        const entry = document.createElement('div');
+        entry.className = `log-entry ${color}`;
+        entry.innerHTML = `<i class="bi ${icon}"></i> [${timestamp}] ${message}`;
+        
+        logOutput.insertBefore(entry, logOutput.firstChild);
+        
+        // Keep only last 50 entries
+        while (logOutput.children.length > 50) {
+            logOutput.removeChild(logOutput.lastChild);
+        }
+    }
+
+    function clearLog() {
+        const logOutput = document.getElementById('log-output');
+        logOutput.innerHTML = '<div class="log-entry text-muted"><i class="bi bi-info-circle"></i> Log cleared.</div>';
+    }
+
+    function triggerScraper(scraper) {
+        const statusDiv = document.getElementById('scrape-status');
+        const scraperName = scraper === 'all' ? 'all scrapers' : scraper;
+        
+        statusDiv.innerHTML = `
+            <div class="alert alert-info">
+                <i class="bi bi-hourglass-split"></i> Triggering ${scraperName}... This may take several minutes.
+            </div>
+        `;
+        
+        addLogEntry(`Triggering ${scraperName}...`, 'info');
+        
+        // Start polling for logs
+        startLogPolling();
+        
+        fetch('/api/trigger-scrape', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ scraper: scraper })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'started') {
+                statusDiv.innerHTML = `
+                    <div class="alert alert-success">
+                        <i class="bi bi-check-circle"></i> ${data.message}
+                    </div>
+                `;
+                addLogEntry(data.message, 'success');
+            } else {
+                statusDiv.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-x-circle"></i> ${data.message}
+                    </div>
+                `;
+                addLogEntry(`Error: ${data.message}`, 'error');
+            }
+            
+            // Clear status message after 5 seconds
+            setTimeout(() => {
+                statusDiv.innerHTML = '';
+            }, 5000);
+        })
+        .catch(error => {
+            statusDiv.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-x-circle"></i> Error: ${error.message}
+                </div>
+            `;
+            addLogEntry(`Error: ${error.message}`, 'error');
+        });
+    }
+
+    function triggerAvailabilityCheck() {
+        const statusDiv = document.getElementById('availability-check-status');
+        
+        statusDiv.innerHTML = `
+            <div class="alert alert-info">
+                <i class="bi bi-hourglass-split"></i> Triggering availability check... This may take several minutes.
+            </div>
+        `;
+        
+        addLogEntry('Triggering availability check...', 'info');
+        
+        fetch('/api/trigger-availability-check', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'started') {
+                statusDiv.innerHTML = `
+                    <div class="alert alert-success">
+                        <i class="bi bi-check-circle"></i> ${data.message}
+                        <br><small>Page will reload in 5 seconds to show updated results...</small>
+                    </div>
+                `;
+                addLogEntry(data.message, 'success');
+                
+                // Reload page after 5 seconds to show updated results
+                setTimeout(() => {
+                    window.location.reload();
+                }, 5000);
+            } else {
+                statusDiv.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-x-circle"></i> ${data.message}
+                    </div>
+                `;
+                addLogEntry(`Error: ${data.message}`, 'error');
+                
+                // Clear status message after 5 seconds
+                setTimeout(() => {
+                    statusDiv.innerHTML = '';
+                }, 5000);
+            }
+        })
+        .catch(error => {
+            statusDiv.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-x-circle"></i> Error: ${error.message}
+                </div>
+            `;
+            addLogEntry(`Error: ${error.message}`, 'error');
+        });
+    }
+
+    // Exclusion Management Functions
+    function loadExclusions() {
+        fetch('/api/exclusions')
+            .then(response => response.json())
+            .then(data => {
+                const tbody = document.getElementById('exclusion-list');
+                const countBadge = document.getElementById('exclusion-count');
+                const countBadgeAccordion = document.getElementById('exclusion-count-accordion');
+                tbody.innerHTML = '';
+                
+                if (data.exclusions && data.exclusions.length > 0) {
+                    // Update count badge
+                    countBadge.textContent = `${data.exclusions.length} exclusion${data.exclusions.length === 1 ? '' : 's'}`;
+                    countBadgeAccordion.textContent = data.exclusions.length;
+                    
+                    data.exclusions.forEach(exclusion => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${exclusion.make}</td>
+                            <td>${exclusion.model}</td>
+                            <td>
+                                <button class="btn btn-sm btn-danger" onclick="deleteExclusion('${exclusion.id}')">
+                                    <i class="bi bi-trash"></i> Remove
+                                </button>
+                            </td>
+                        `;
+                        tbody.appendChild(row);
+                    });
+                } else {
+                    countBadge.textContent = '0 exclusions';
+                    countBadgeAccordion.textContent = '0';
+                    tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No exclusions configured</td></tr>';
+                }
+            })
+            .catch(error => {
+                console.error('Error loading exclusions:', error);
+                document.getElementById('exclusion-list').innerHTML = 
+                    '<tr><td colspan="3" class="text-center text-danger">Error loading exclusions</td></tr>';
+            });
+    }
+
+    function addExclusion() {
+        const make = document.getElementById('exclusion-make').value.trim();
+        const model = document.getElementById('exclusion-model').value.trim();
+        const statusDiv = document.getElementById('exclusion-status');
+        
+        if (!make) {
+            statusDiv.innerHTML = '<div class="alert alert-warning">Please enter a make</div>';
+            setTimeout(() => { statusDiv.innerHTML = ''; }, 3000);
+            return;
+        }
+        
+        fetch('/api/exclusions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ make, model })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                statusDiv.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
+                document.getElementById('exclusion-make').value = '';
+                document.getElementById('exclusion-model').value = '';
+                loadExclusions();
+            } else {
+                statusDiv.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
+            }
+            setTimeout(() => { statusDiv.innerHTML = ''; }, 3000);
+        })
+        .catch(error => {
+            statusDiv.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            setTimeout(() => { statusDiv.innerHTML = ''; }, 3000);
+        });
+    }
+
+    function deleteExclusion(exclusionId) {
+        if (!confirm('Are you sure you want to remove this exclusion?')) {
+            return;
+        }
+        
+        const statusDiv = document.getElementById('exclusion-status');
+        
+        fetch(`/api/exclusions/${exclusionId}`, {
+            method: 'DELETE'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                statusDiv.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
+                loadExclusions();
+            } else {
+                statusDiv.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
+            }
+            setTimeout(() => { statusDiv.innerHTML = ''; }, 3000);
+        })
+        .catch(error => {
+            statusDiv.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            setTimeout(() => { statusDiv.innerHTML = ''; }, 3000);
+        });
+    }
+
+    // Load exclusions on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        loadExclusions();
+        loadCriticalFeatures();
+        startCountdownTimer();
+    });
+
+    // Critical Features Management Functions
+    function loadCriticalFeatures() {
+        fetch('/api/critical-features')
+            .then(response => response.json())
+            .then(data => {
+                const accordion = document.getElementById('critical-features-accordion');
+                if (!accordion) {
+                    console.error('Accordion element not found!');
+                    return;
+                }
+                accordion.innerHTML = '';
+                
+                if (data.categories && data.categories.length > 0) {
+                    // Count total enabled features across all categories
+                    let enabledCount = 0;
+                    data.categories.forEach(category => {
+                        enabledCount += category.features.filter(f => f.enabled).length;
+                    });
+                    
+                    // Calculate tier thresholds
+                    const perfectMatch = enabledCount;
+                    const greatMatchMin = Math.max(1, Math.ceil(enabledCount * 0.75)); // 75% rounded up
+                    const greatMatchMax = enabledCount - 1;
+                    const goodMatchMin = Math.max(1, Math.ceil(enabledCount * 0.5)); // 50% rounded up
+                    const goodMatchMax = greatMatchMin - 1;
+                    const minRequired = goodMatchMin;
+                    
+                    // Update tier descriptions
+                    const tierDescriptions = document.getElementById('tier-descriptions');
+                    tierDescriptions.innerHTML = `
+                        <strong>Perfect Matches:</strong> ${perfectMatch}/${perfectMatch} features • 
+                        <strong>Great Matches:</strong> ${greatMatchMin}-${greatMatchMax}/${perfectMatch} features • 
+                        <strong>Good Matches:</strong> ${goodMatchMin}-${goodMatchMax}/${perfectMatch} features
+                    `;
+                    
+                    // Update minimum features note
+                    const minFeaturesNote = document.getElementById('min-features-note');
+                    minFeaturesNote.textContent = `The system requires at least ${minRequired}/${perfectMatch} features to show a car.`;
+                    
+                    // Create accordion items for each category
+                    data.categories.forEach((category, index) => {
+                        const categoryId = category.id;
+                        const enabledInCategory = category.features.filter(f => f.enabled).length;
+                        
+                        const accordionItem = document.createElement('div');
+                        accordionItem.className = 'accordion-item';
+                        accordionItem.innerHTML = `
+                            <h2 class="accordion-header" id="heading-${categoryId}">
+                                <button class="accordion-button ${index === 0 ? '' : 'collapsed'}" type="button" 
+                                        data-bs-toggle="collapse" data-bs-target="#collapse-${categoryId}" 
+                                        aria-expanded="${index === 0 ? 'true' : 'false'}" aria-controls="collapse-${categoryId}">
+                                    <strong>${category.name}</strong>
+                                    <span class="badge bg-primary ms-2">${enabledInCategory}/${category.features.length} enabled</span>
+                                </button>
+                            </h2>
+                            <div id="collapse-${categoryId}" class="accordion-collapse collapse ${index === 0 ? 'show' : ''}" 
+                                 aria-labelledby="heading-${categoryId}" data-bs-parent="#critical-features-accordion">
+                                <div class="accordion-body p-0">
+                                    <table class="table table-sm table-striped mb-0">
+                                        <tbody id="features-${categoryId}">
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        `;
+                        accordion.appendChild(accordionItem);
+                        
+                        // Add features to this category
+                        const tbody = document.getElementById(`features-${categoryId}`);
+                        category.features.forEach(feature => {
+                            const row = document.createElement('tr');
+                            row.innerHTML = `
+                                <td style="width: 50px;" class="text-center">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="feature-${feature.id}" 
+                                               ${feature.enabled ? 'checked' : ''} 
+                                               onchange="toggleCriticalFeature('${feature.id}', this.checked)">
+                                    </div>
+                                </td>
+                                <td><strong>${feature.name}</strong></td>
+                                <td class="text-muted">${feature.description || 'No description available'}</td>
+                            `;
+                            tbody.appendChild(row);
+                        });
+                    });
+                } else {
+                    accordion.innerHTML = '<div class="text-center text-muted p-3">No critical features configured</div>';
+                }
+            })
+            .catch(error => {
+                console.error('Error loading critical features:', error);
+                document.getElementById('critical-features-accordion').innerHTML = 
+                    '<div class="text-center text-danger p-3">Error loading critical features</div>';
+            });
+    }
+
+    function toggleCriticalFeature(featureId, enabled) {
+        const statusDiv = document.getElementById('critical-features-status');
+        
+        fetch(`/api/critical-features/${featureId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: enabled })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                statusDiv.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
+                setTimeout(() => { statusDiv.innerHTML = ''; }, 3000);
+                // Reload features to update tier descriptions
+                loadCriticalFeatures();
+            } else {
+                statusDiv.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
+                // Revert checkbox on error
+                document.getElementById(`feature-${featureId}`).checked = !enabled;
+                setTimeout(() => { statusDiv.innerHTML = ''; }, 3000);
+            }
+        })
+        .catch(error => {
+            statusDiv.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            // Revert checkbox on error
+            document.getElementById(`feature-${featureId}`).checked = !enabled;
+            setTimeout(() => { statusDiv.innerHTML = ''; }, 3000);
+        });
+    }
+
+    // Countdown Timer for Next Availability Check
+    let countdownInterval = null;
+    let nextCheckTime = null;
+
+    function startCountdownTimer() {
+        const lastCheckStr = "{{ availability_last_check }}";
+        const intervalHours = {{ availability_interval }};
+        
+        if (lastCheckStr === "Never") {
+            document.getElementById('next-check-countdown').textContent = 'Not scheduled yet';
+            return;
+        }
+        
+        // Parse last check time (format: "YYYY-MM-DD HH:MM")
+        const lastCheckParts = lastCheckStr.split(' ');
+        const dateParts = lastCheckParts[0].split('-');
+        const timeParts = lastCheckParts[1].split(':');
+        
+        const lastCheck = new Date(
+            parseInt(dateParts[0]), // year
+            parseInt(dateParts[1]) - 1, // month (0-indexed)
+            parseInt(dateParts[2]), // day
+            parseInt(timeParts[0]), // hour
+            parseInt(timeParts[1])  // minute
+        );
+        
+        // Calculate next check time
+        nextCheckTime = new Date(lastCheck.getTime() + (intervalHours * 60 * 60 * 1000));
+        
+        // Update countdown every second
+        updateCountdown();
+        countdownInterval = setInterval(updateCountdown, 1000);
+    }
+
+    function updateCountdown() {
+        if (!nextCheckTime) return;
+        
+        const now = new Date();
+        const diff = nextCheckTime - now;
+        
+        if (diff <= 0) {
+            document.getElementById('next-check-countdown').innerHTML = 
+                '<span class="text-warning">Overdue - should run soon</span>';
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+            }
+            return;
+        }
+        
+        const hours = Math.floor(diff / (1000 * 60 * 60));
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+        
+        document.getElementById('next-check-countdown').innerHTML = 
+            `<span class="text-primary">${hours}h ${minutes}m ${seconds}s</span>`;
+    }
+
+    // History View Functions
+    function toggleHistoryView() {
+        const historyDiv = document.getElementById('availability-history');
+        if (historyDiv.style.display === 'none') {
+            historyDiv.style.display = 'block';
+            loadAvailabilityHistory();
+        } else {
+            historyDiv.style.display = 'none';
+        }
+    }
+
+    function loadAvailabilityHistory() {
+        fetch('/api/availability-history')
+            .then(response => response.json())
+            .then(data => {
+                const tbody = document.getElementById('availability-history-list');
+                tbody.innerHTML = '';
+                
+                if (data.history && data.history.length > 0) {
+                    data.history.forEach(entry => {
+                        const statusBadge = entry.status === 'success' 
+                            ? '<span class="badge bg-success">Success</span>'
+                            : entry.status === 'error'
+                            ? '<span class="badge bg-danger">Error</span>'
+                            : '<span class="badge bg-warning">In Progress</span>';
+                        
+                        const duration = entry.duration_seconds 
+                            ? `${Math.round(entry.duration_seconds)}s` 
+                            : 'N/A';
+                        
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${entry.started_at}</td>
+                            <td>${statusBadge}</td>
+                            <td>${entry.cars_checked}</td>
+                            <td>${entry.cars_unavailable}</td>
+                            <td>${duration}</td>
+                        `;
+                        tbody.appendChild(row);
+                    });
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">No availability check history found</td></tr>';
+                }
+            })
+            .catch(error => {
+                console.error('Error loading availability history:', error);
+                document.getElementById('availability-history-list').innerHTML = 
+                    '<tr><td colspan="5" class="text-center text-danger">Error loading history</td></tr>';
+            });
+    }
+
+    function loadScraperStatistics() {
+        fetch('/api/scraper-statistics')
+            .then(response => response.json())
+            .then(data => {
+                const statsDiv = document.getElementById('scraper-statistics');
+                statsDiv.innerHTML = '';
+                
+                if (data.statistics && data.statistics.length > 0) {
+                    data.statistics.forEach(stat => {
+                        const successRateClass = stat.success_rate >= 90 ? 'text-success' : 
+                                                  stat.success_rate >= 70 ? 'text-warning' : 'text-danger';
+                        
+                        const lastCheck = stat.last_check || 'Never';
+                        const websiteLabel = stat.website.replace('.nl', '').replace(/^./, str => str.toUpperCase());
+                        
+                        const colDiv = document.createElement('div');
+                        colDiv.className = 'col-md-6 col-lg-3 mb-3';
+                        colDiv.innerHTML = `
+                            <div class="card h-100">
+                                <div class="card-body">
+                                    <h6 class="card-subtitle mb-2 text-muted">
+                                        <i class="bi bi-globe"></i> ${websiteLabel}
+                                    </h6>
+                                    <div class="mb-2">
+                                        <strong class="${successRateClass}">${stat.success_rate}%</strong>
+                                        <small class="text-muted">Success Rate</small>
+                                    </div>
+                                    <div class="small">
+                                        <div><strong>${stat.total_checks}</strong> total checks</div>
+                                        <div><strong>${stat.successful_checks}</strong> successful</div>
+                                        <div><strong>${stat.total_cars_found}</strong> cars found</div>
+                                        <div><strong>${stat.total_cars_updated}</strong> cars updated</div>
+                                        <div class="text-muted mt-1">Last: ${lastCheck}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                        statsDiv.appendChild(colDiv);
+                    });
+                } else {
+                    statsDiv.innerHTML = '<div class="col-12 text-center text-muted">No scraper statistics available</div>';
+                }
+            })
+            .catch(error => {
+                console.error('Error loading scraper statistics:', error);
+                document.getElementById('scraper-statistics').innerHTML = 
+                    '<div class="col-12 text-center text-danger">Error loading statistics</div>';
+            });
+    }
+
+    function refreshScraperStatistics() {
+        const btn = document.getElementById('refresh-stats-btn');
+        const icon = btn.querySelector('i');
+        
+        // Add spinning animation
+        icon.classList.add('fa-spin');
+        btn.disabled = true;
+        
+        // Reload statistics
+        loadScraperStatistics();
+        
+        // Remove animation after 1 second
+        setTimeout(() => {
+            icon.classList.remove('fa-spin');
+            btn.disabled = false;
+        }, 1000);
+    }
+
+    // Chart.js instances
+    let successRateChart = null;
+    let carsFoundChart = null;
+    let currentTrendsData = null;
+
+    function loadScraperTrends() {
+        fetch('/api/scraper-trends')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    const trends = data.trends;
+                    currentTrendsData = trends;
+                    
+                    // Populate website filter dropdown
+                    const filterSelect = document.getElementById('trends-website-filter');
+                    const currentValue = filterSelect.value;
+                    filterSelect.innerHTML = '<option value="all">All Websites</option>';
+                    trends.websites.forEach(website => {
+                        const option = document.createElement('option');
+                        option.value = website;
+                        option.textContent = website;
+                        filterSelect.appendChild(option);
+                    });
+                    filterSelect.value = currentValue;
+                    
+                    // Update charts
+                    updateTrendCharts(trends, filterSelect.value);
+                    
+                    // Hide loading message and show charts
+                    document.getElementById('trends-loading').style.display = 'none';
+                    document.getElementById('trends-charts').style.display = 'block';
+                } else {
+                    console.error('Error loading trends:', data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error loading scraper trends:', error);
+                document.getElementById('trends-loading').innerHTML = 
+                    '<i class="bi bi-exclamation-triangle"></i> Error loading trends';
+            });
+    }
+
+    function filterTrends() {
+        if (currentTrendsData) {
+            const filterSelect = document.getElementById('trends-website-filter');
+            updateTrendCharts(currentTrendsData, filterSelect.value);
+        }
+    }
+
+    function updateTrendCharts(trends, selectedWebsite) {
+        const dates = trends.dates;
+        const websites = selectedWebsite === 'all' ? trends.websites : [selectedWebsite];
+        
+        // Color palette
+        const colors = [
+            'rgb(22, 199, 154)', // #16c79a - primary color
+            'rgb(54, 162, 235)',
+            'rgb(255, 99, 132)',
+            'rgb(255, 159, 64)',
+            'rgb(153, 102, 255)',
+            'rgb(75, 192, 192)'
+        ];
+        
+        // Success Rate Chart
+        const successRateData = {
+            labels: dates,
+            datasets: websites.map((website, index) => ({
+                label: website,
+                data: trends.success_rate[website],
+                borderColor: colors[index % colors.length],
+                backgroundColor: colors[index % colors.length].replace('rgb', 'rgba').replace(')', ', 0.1)'),
+                tension: 0.4,
+                fill: true
+            }))
+        };
+        
+        if (successRateChart) {
+            successRateChart.destroy();
+        }
+        
+        const successRateCtx = document.getElementById('success-rate-chart').getContext('2d');
+        successRateChart = new Chart(successRateCtx, {
+            type: 'line',
+            data: successRateData,
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Success Rate Over Time (%)'
+                    },
+                    legend: {
+                        display: websites.length > 1
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            callback: function(value) {
+                                return value + '%';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        
+        // Cars Found Chart
+        const carsFoundData = {
+            labels: dates,
+            datasets: websites.map((website, index) => ({
+                label: website + ' - Found',
+                data: trends.cars_found[website],
+                backgroundColor: colors[index % colors.length],
+                borderColor: colors[index % colors.length],
+                borderWidth: 1
+            }))
+        };
+        
+        if (carsFoundChart) {
+            carsFoundChart.destroy();
+        }
+        
+        const carsFoundCtx = document.getElementById('cars-found-chart').getContext('2d');
+        carsFoundChart = new Chart(carsFoundCtx, {
+            type: 'bar',
+            data: carsFoundData,
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Cars Found Per Day'
+                    },
+                    legend: {
+                        display: websites.length > 1
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+
+    // Scheduler Configuration Functions
+    function loadSchedulerStatus() {
+        fetch('/api/scheduler-status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Populate form fields
+                    document.getElementById('scheduler-enabled').checked = data.scheduler.enabled;
+                    document.getElementById('scheduler-interval').value = data.scheduler.interval_minutes;
+                    document.getElementById('next-run-time').textContent = data.scheduler.next_run || 'Not scheduled';
+                    
+                    // Populate website toggles
+                    populateWebsiteToggles(data.websites);
+                    
+                    // Show config, hide loading
+                    document.getElementById('scheduler-loading').style.display = 'none';
+                    document.getElementById('scheduler-config').style.display = 'block';
+                } else {
+                    document.getElementById('scheduler-loading').innerHTML = 
+                        '<i class="bi bi-exclamation-triangle"></i> Error loading scheduler configuration';
+                }
+            })
+            .catch(error => {
+                console.error('Error loading scheduler status:', error);
+                document.getElementById('scheduler-loading').innerHTML = 
+                    '<i class="bi bi-exclamation-triangle"></i> Error loading scheduler configuration';
+            });
+    }
+
+    function populateWebsiteToggles(websites) {
+        const websiteConfigsDiv = document.getElementById('website-configs');
+        websiteConfigsDiv.innerHTML = '';
+        
+        websites.forEach(website => {
+            const colDiv = document.createElement('div');
+            colDiv.className = 'col-md-4 mb-2';
+            
+            const websiteName = website.name;
+            const websiteLabel = websiteName.replace('.nl', '').replace(/^./, str => str.toUpperCase());
+            
+            colDiv.innerHTML = `
+                <div class="card">
+                    <div class="card-body p-2">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input website-toggle" type="checkbox" 
+                                   id="website-${websiteName}" 
+                                   data-website="${websiteName}"
+                                   ${website.enabled ? 'checked' : ''}>
+                            <label class="form-check-label" for="website-${websiteName}">
+                                <strong>${websiteLabel}</strong>
+                                ${website.last_run ? `<br><small class="text-muted">Last: ${website.last_run}</small>` : ''}
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            websiteConfigsDiv.appendChild(colDiv);
+        });
+    }
+
+    function saveSchedulerConfig() {
+        const statusDiv = document.getElementById('scheduler-save-status');
+        const saveBtn = document.getElementById('save-scheduler-btn');
+        
+        // Disable button while saving
+        saveBtn.disabled = true;
+        
+        // Collect website toggles
+        const websiteToggles = [];
+        document.querySelectorAll('.website-toggle').forEach(toggle => {
+            websiteToggles.push({
+                name: toggle.dataset.website,
+                enabled: toggle.checked
+            });
+        });
+        
+        const config = {
+            scheduler_enabled: document.getElementById('scheduler-enabled').checked,
+            interval_minutes: parseInt(document.getElementById('scheduler-interval').value),
+            websites: websiteToggles
+        };
+        
+        statusDiv.innerHTML = `
+            <div class="alert alert-info">
+                <i class="bi bi-hourglass-split"></i> Saving configuration...
+            </div>
+        `;
+        
+        fetch('/api/scheduler-update', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(config)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                statusDiv.innerHTML = `
+                    <div class="alert alert-success">
+                        <i class="bi bi-check-circle"></i> ${data.message}
+                        ${data.restart_required ? '<br><strong>Note:</strong> Flask app restart required for changes to take effect.' : ''}
+                    </div>
+                `;
+                
+                // Reload scheduler status to refresh next run time
+                setTimeout(() => {
+                    loadSchedulerStatus();
+                }, 2000);
+            } else {
+                statusDiv.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-x-circle"></i> ${data.message}
+                    </div>
+                `;
+            }
+            
+            // Re-enable button
+            saveBtn.disabled = false;
+            
+            // Clear status message after 5 seconds
+            setTimeout(() => {
+                statusDiv.innerHTML = '';
+            }, 5000);
+        })
+        .catch(error => {
+            statusDiv.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-x-circle"></i> Error: ${error.message}
+                </div>
+            `;
+            saveBtn.disabled = false;
+            
+            setTimeout(() => {
+                statusDiv.innerHTML = '';
+            }, 5000);
+        });
+    }
+
+    // Website filter change handler
+    document.addEventListener('DOMContentLoaded', function() {
+        const filterSelect = document.getElementById('trends-website-filter');
+        if (filterSelect) {
+            filterSelect.addEventListener('change', function() {
+                fetch('/api/scraper-trends')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            updateTrendCharts(data.trends, this.value);
+                        }
+                    });
+            });
+        }
+    });
+
+    // Load scraper statistics on page load
+    // Poll scraper logs every 2 seconds
+    let logPollInterval = null;
+
+    function startLogPolling() {
+        if (logPollInterval) return; // Already polling
+        
+        logPollInterval = setInterval(fetchScraperLogs, 2000);
+        fetchScraperLogs(); // Initial fetch
+    }
+
+    function stopLogPolling() {
+        if (logPollInterval) {
+            clearInterval(logPollInterval);
+            logPollInterval = null;
+        }
+    }
+
+    function fetchScraperLogs() {
+        fetch('/api/scraper-logs')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success' && data.logs && data.logs.length > 0) {
+                    updateLogDisplay(data.logs);
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching logs:', error);
+            });
+    }
+
+    function updateLogDisplay(logs) {
+        const logOutput = document.getElementById('log-output');
+        logOutput.innerHTML = ''; // Clear existing
+        
+        logs.reverse().forEach(log => {
+            const level = log.level || 'INFO';
+            const icon = level === 'ERROR' ? 'bi-x-circle' : 
+                         level === 'WARNING' ? 'bi-exclamation-triangle' : 
+                         'bi-info-circle';
+            const color = level === 'ERROR' ? 'text-danger' : 
+                          level === 'WARNING' ? 'text-warning' : 
+                          'text-info';
+            
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${color}`;
+            entry.innerHTML = `<i class="bi ${icon}"></i> ${log.message}`;
+            logOutput.appendChild(entry);
+        });
+    }
+
+    // Scraper Service Control Functions
+    async function refreshScraperStatus() {
+        const statusBadge = document.getElementById('scraper-status-badge');
+        const startBtn = document.getElementById('start-scraper-btn');
+        const stopBtn = document.getElementById('stop-scraper-btn');
+        const statusDiv = document.getElementById('scraper-service-status');
+        
+        statusBadge.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Checking...';
+        statusBadge.className = 'badge bg-secondary';
+        startBtn.disabled = true;
+        stopBtn.disabled = true;
+        
+        try {
+            const response = await fetch('/api/scraper-service/status');
+            const data = await response.json();
+            
+            if (data.status === 'running') {
+                statusBadge.innerHTML = '<i class="bi bi-check-circle-fill"></i> Running';
+                statusBadge.className = 'badge bg-success';
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+            } else if (data.status === 'stopped') {
+                statusBadge.innerHTML = '<i class="bi bi-stop-circle-fill"></i> Stopped';
+                statusBadge.className = 'badge bg-danger';
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+            } else {
+                statusBadge.innerHTML = '<i class="bi bi-question-circle-fill"></i> Unknown';
+                statusBadge.className = 'badge bg-warning';
+                startBtn.disabled = false;
+                stopBtn.disabled = false;
+            }
+            
+            statusDiv.innerHTML = '';
+        } catch (error) {
+            statusBadge.innerHTML = '<i class="bi bi-exclamation-circle-fill"></i> Error';
+            statusBadge.className = 'badge bg-warning';
+            statusDiv.innerHTML = `
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle"></i> Could not check service status: ${error.message}
+                </div>
+            `;
+        }
+    }
+    
+    async function controlScraperService(action) {
+        const statusDiv = document.getElementById('scraper-service-status');
+        const startBtn = document.getElementById('start-scraper-btn');
+        const stopBtn = document.getElementById('stop-scraper-btn');
+        
+        // Disable buttons during operation
+        startBtn.disabled = true;
+        stopBtn.disabled = true;
+        
+        const actionText = action === 'start' ? 'Starting' : 'Stopping';
+        statusDiv.innerHTML = `
+            <div class="alert alert-info">
+                <span class="spinner-border spinner-border-sm"></span> ${actionText} scraper service...
+            </div>
+        `;
+        
+        try {
+            const response = await fetch('/api/scraper-service/control', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ action: action })
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+                statusDiv.innerHTML = `
+                    <div class="alert alert-success">
+                        <i class="bi bi-check-circle"></i> ${data.message}
+                    </div>
+                `;
+                addLogEntry(data.message, 'success');
+                
+                // Refresh status after a short delay
+                setTimeout(refreshScraperStatus, 2000);
+            } else {
+                statusDiv.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-x-circle"></i> Error: ${data.message || 'Operation failed'}
+                    </div>
+                `;
+                addLogEntry(`Error ${action}ing scraper: ${data.message}`, 'error');
+                refreshScraperStatus();
+            }
+            
+            // Clear status message after 5 seconds
+            setTimeout(() => {
+                statusDiv.innerHTML = '';
+            }, 5000);
+            
+        } catch (error) {
+            statusDiv.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-x-circle"></i> Error: ${error.message}
+                </div>
+            `;
+            addLogEntry(`Error ${action}ing scraper: ${error.message}`, 'error');
+            refreshScraperStatus();
+        }
+    }
+
+    // User Management Functions
+    async function loadUsers() {
+        try {
+            const response = await fetch('/api/users');
+            const data = await response.json();
+            
+            const tbody = document.getElementById('users-table-body');
+            
+            if (data.users && data.users.length > 0) {
+                tbody.innerHTML = data.users.map(user => `
+                    <tr>
+                        <td>${user.username}</td>
+                        <td>
+                            ${user.is_admin ? '<span class="badge bg-primary">Yes</span>' : '<span class="badge bg-secondary">No</span>'}
+                        </td>
+                        <td>
+                            ${user.is_active ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-danger">No</span>'}
+                        </td>
+                        <td>${user.last_login ? new Date(user.last_login).toLocaleString() : 'Never'}</td>
+                        <td>${new Date(user.created_at).toLocaleString()}</td>
+                        <td>
+                            <button class="btn btn-sm btn-primary" onclick="editUser(${user.id})">
+                                <i class="bi bi-pencil"></i> Edit
+                            </button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteUser(${user.id}, '${user.username}')">
+                                <i class="bi bi-trash"></i> Delete
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+            } else {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center">No users found</td></tr>';
+            }
+        } catch (error) {
+            console.error('Error loading users:', error);
+            const tbody = document.getElementById('users-table-body');
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">Error loading users: ${error.message}</td></tr>`;
+        }
+    }
+
+    function showCreateUserModal() {
+        document.getElementById('userModalTitle').textContent = 'Create User';
+        document.getElementById('userForm').reset();
+        document.getElementById('userId').value = '';
+        document.getElementById('passwordGroup').style.display = 'block';
+        document.getElementById('password').required = true;
+        
+        const modal = new bootstrap.Modal(document.getElementById('userModal'));
+        modal.show();
+    }
+
+    async function editUser(userId) {
+        try {
+            const response = await fetch(`/api/users/${userId}`);
+            const data = await response.json();
+            
+            if (data.user) {
+                document.getElementById('userModalTitle').textContent = 'Edit User';
+                document.getElementById('userId').value = data.user.id;
+                document.getElementById('username').value = data.user.username;
+                document.getElementById('password').value = '';
+                document.getElementById('isAdmin').checked = data.user.is_admin;
+                document.getElementById('isActive').checked = data.user.is_active;
+                document.getElementById('passwordGroup').style.display = 'block';
+                document.getElementById('password').required = false;
+                
+                const modal = new bootstrap.Modal(document.getElementById('userModal'));
+                modal.show();
+            }
+        } catch (error) {
+            alert('Error loading user: ' + error.message);
+        }
+    }
+
+    async function saveUser() {
+        const userId = document.getElementById('userId').value;
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        const isAdmin = document.getElementById('isAdmin').checked;
+        const isActive = document.getElementById('isActive').checked;
+        
+        // Validation
+        if (!username) {
+            alert('Username is required');
+            return;
+        }
+        
+        if (!userId && !password) {
+            alert('Password is required for new users');
+            return;
+        }
+        
+        const userData = {
+            username: username,
+            is_admin: isAdmin,
+            is_active: isActive
+        };
+        
+        if (password) {
+            userData.password = password;
+        }
+        
+        try {
+            const url = userId ? `/api/users/${userId}` : '/api/users';
+            const method = userId ? 'PUT' : 'POST';
+            
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(userData)
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+                const modal = bootstrap.Modal.getInstance(document.getElementById('userModal'));
+                modal.hide();
+                loadUsers();
+                alert(data.message || 'User saved successfully');
+            } else {
+                alert('Error: ' + (data.message || 'Failed to save user'));
+            }
+        } catch (error) {
+            alert('Error saving user: ' + error.message);
+        }
+    }
+
+    async function deleteUser(userId, username) {
+        if (!confirm(`Are you sure you want to delete user "${username}"?`)) {
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/users/${userId}`, {
+                method: 'DELETE'
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+                loadUsers();
+                alert(data.message || 'User deleted successfully');
+            } else {
+                alert('Error: ' + (data.message || 'Failed to delete user'));
+            }
+        } catch (error) {
+            alert('Error deleting user: ' + error.message);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        loadScraperStatistics();
+        loadScraperTrends();
+        loadSchedulerStatus();
+        startLogPolling(); // Start polling for scraper logs
+        // refreshScraperStatus(); // Check scraper service status on page load - Disabled: UI elements missing
+        loadUsers(); // Load users on page load
+        loadAvailabilityHistory(); // Load availability check history on page load
+    });
+</script>
+{% endblock %}
