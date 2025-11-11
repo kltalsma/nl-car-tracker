@@ -58,3 +58,7 @@ backups/
 *.tar.gz
 *.tar
 *.zip
+
+# Backup files
+*.bak
+*~
