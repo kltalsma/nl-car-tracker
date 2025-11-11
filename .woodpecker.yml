@@ -1,14 +1,12 @@
 # Woodpecker CI Pipeline for NL Car Tracker
 # https://woodpecker-ci.org/docs/usage/intro
 
+# Run on all events by default - filter per-step as needed
 when:
-  - event: push
-    branch: main
-  - event: pull_request
-  - event: manual
+  - event: [push, pull_request, manual]
 
 steps:
-  # Install dependencies and run tests
+  # Install dependencies and run tests (runs on all branches)
   test:
     image: python:3.11-slim
     commands:
@@ -34,17 +32,14 @@ steps:
           pytest -v || echo "Pytest completed with status $?"
         fi
 
-  # Build Docker images
+  # Build Docker images (runs on main and feature/* branches)
   build-docker:
     image: docker:24-dind
     privileged: true
     when:
-      - branch: main
-        event: push
-      - branch: feature/woodpecker-ci
-        event: 
-          - push
-          - manual
+      - event: push
+        branch: [main, feature/*]
+      - event: manual
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     commands:
@@ -54,7 +49,7 @@ steps:
       - echo "Docker image built successfully"
       - docker images | grep nl-car-tracker
 
-  # Lint and code quality checks (optional)
+  # Lint and code quality checks (runs on all branches)
   lint:
     image: python:3.11-slim
     commands:
