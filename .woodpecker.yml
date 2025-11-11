@@ -34,13 +34,17 @@ steps:
           pytest -v || echo "Pytest completed with status $?"
         fi
 
-  # Build Docker images (optional - only on main branch)
+  # Build Docker images
   build-docker:
     image: docker:24-dind
     privileged: true
     when:
-      branch: main
-      event: push
+      - branch: main
+        event: push
+      - branch: feature/woodpecker-ci
+        event: 
+          - push
+          - manual
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     commands:
