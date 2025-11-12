@@ -3,7 +3,7 @@
 
 # Run on all events by default - filter per-step as needed
 when:
-  - event: [pull_request, manual, push]
+  - event: [pull_request, manual]
 
 steps:
   # Install dependencies and run tests (runs on all branches)
@@ -38,10 +38,8 @@ steps:
     privileged: true
     when:
       - event: pull_request
-        branch: [main, master, feature/*]
+        branch: [main, feature/*]
       - event: manual
-      - event: push
-        branch: master
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     commands:
@@ -60,20 +58,3 @@ steps:
       - flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
       - echo "Checking code formatting with black..."
       - black --check . || echo "Code formatting check completed"
-
-  # Deploy to production (only on push to master)
-  deploy:
-    image: docker:24-dind
-    privileged: true
-    when:
-      - event: push
-        branch: master
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    commands:
-      - echo "Deploying to production..."
-      - cd /home/kltalsma/nl-car-tracker
-      - docker-compose down
-      - docker-compose up -d --build
-      - echo "Deployment completed successfully"
-      - docker-compose ps
