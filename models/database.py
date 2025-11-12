@@ -195,6 +195,8 @@ class CurrentCar(Base):
     initial_purchase_price = Column(Float)  # Original purchase price
     purchase_date = Column(DateTime)  # Date of purchase
     average_km_per_year = Column(Integer)  # Expected annual mileage
+    purchase_mileage_km = Column(Integer)  # Mileage at time of purchase
+    estimated_new_price = Column(Float)  # Estimated new price for depreciation calculation
     
     # RDW data
     rdw_data = Column(JSON)  # Full RDW response

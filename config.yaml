@@ -384,7 +384,9 @@ current_car:
   year: 2018
   initial_purchase_price: 16750
   purchase_date: 2022-01-15
-  average_km_per_year: 27000
+  purchase_mileage_km: 74751
+  average_km_per_year: 14000
+  estimated_new_price: 29838
 trade_in_checker:
   enabled: true
   check_interval_hours: 168

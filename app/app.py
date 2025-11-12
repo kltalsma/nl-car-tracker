@@ -155,7 +155,8 @@ def initialize_current_car_from_config():
                 mileage_km=current_car_config.get('mileage_km'),
                 initial_purchase_price=current_car_config.get('initial_purchase_price'),
                 purchase_date=purchase_date,
-                average_km_per_year=current_car_config.get('average_km_per_year')
+                average_km_per_year=current_car_config.get('average_km_per_year'),
+                estimated_new_price=current_car_config.get('estimated_new_price')
             )
             session.add(current_car)
             session.commit()
@@ -202,6 +203,13 @@ def initialize_current_car_from_config():
             if current_car_config.get('average_km_per_year') and existing_car.average_km_per_year != current_car_config.get('average_km_per_year'):
                 existing_car.average_km_per_year = current_car_config.get('average_km_per_year')
                 updated = True
+            
+            # Update estimated_new_price if provided
+            if current_car_config.get('estimated_new_price'):
+                current_estimated = getattr(existing_car, 'estimated_new_price', None)
+                if current_estimated != current_car_config.get('estimated_new_price'):
+                    existing_car.estimated_new_price = current_car_config.get('estimated_new_price')
+                    updated = True
             
             if updated:
                 session.commit()
@@ -3377,7 +3385,9 @@ def calculate_depreciation():
             'purchase_date': current_car.purchase_date,
             'mileage_km': current_car.mileage_km,
             'average_km_per_year': current_car.average_km_per_year,
-            'year': current_car.year  # Add manufacture year for accurate age calculation
+            'year': current_car.year,  # Add manufacture year for accurate age calculation
+            'purchase_mileage_km': current_car.purchase_mileage_km,  # Add purchase mileage for accurate km/year
+            'estimated_new_price': current_car.estimated_new_price  # Add estimated new price for trade-in calculation
         }
         
         # Calculate depreciation
@@ -3397,6 +3407,7 @@ def calculate_depreciation():
                 'year': current_car.year,
                 'license_plate': current_car.license_plate,
                 'purchase_price': current_car.initial_purchase_price,
+                'estimated_new_price': current_car.estimated_new_price,
                 'purchase_date': current_car.purchase_date.isoformat() if current_car.purchase_date else None,
                 'current_mileage': current_car.mileage_km
             },
