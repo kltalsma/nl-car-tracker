@@ -26,7 +26,7 @@ class DepreciationCalculator:
     AFTER_5_YEARS_RATE = 0.07   # 7% per year after 5 years
     
     # Mileage penalty coefficient
-    MILEAGE_PENALTY_COEFFICIENT = 0.000008  # Calibrated to Dutch market data
+    MILEAGE_PENALTY_COEFFICIENT = 0.000015  # Calibrated to Dutch market data
     
     def __init__(self, 
                  initial_price: float, 
