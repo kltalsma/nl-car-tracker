@@ -197,7 +197,7 @@ const priceDistChart = new Chart(priceDistCtx, {
             data: [{% for range in price_distribution %}{{ range.count }}{% if not loop.last %}, {% endif %}{% endfor %}],
             backgroundColor: [
                 {% for range in price_distribution %}
-                {% if loop.index0 == preferred_range_index %}
+                {% if loop.index0 in preferred_range_indices %}
                 'rgba(255, 193, 7, 0.8)'  // Gold/yellow for preferred range
                 {% else %}
                 'rgba(22, 199, 154, 0.7)'  // Green for other ranges
@@ -207,7 +207,7 @@ const priceDistChart = new Chart(priceDistCtx, {
             ],
             borderColor: [
                 {% for range in price_distribution %}
-                {% if loop.index0 == preferred_range_index %}
+                {% if loop.index0 in preferred_range_indices %}
                 'rgba(255, 193, 7, 1)'
                 {% else %}
                 'rgba(22, 199, 154, 1)'
