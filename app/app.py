@@ -1825,18 +1825,17 @@ def analytics():
         })
         preferred_counts.append(preferred_count)
     
-    # Find the range with most preferred cars
-    # Only highlight if there's a clear winner (no ties)
+    # Find the range(s) with most preferred cars
+    # Highlight all ranges that have the maximum count (including ties)
     max_preferred_count = max(preferred_counts) if preferred_counts else 0
-    count_of_max = preferred_counts.count(max_preferred_count) if max_preferred_count > 0 else 0
     
-    # Only set preferred_range_index if there's a unique maximum (not a tie)
-    if max_preferred_count > 0 and count_of_max == 1:
-        preferred_range_index = preferred_counts.index(max_preferred_count)
+    # Get all indices that have the maximum count
+    if max_preferred_count > 0:
+        preferred_range_indices = [i for i, count in enumerate(preferred_counts) if count == max_preferred_count]
     else:
-        preferred_range_index = -1  # Don't highlight any range if there's a tie
+        preferred_range_indices = []  # No preferred cars at all
     
-    logger.info(f"Preferred counts by range: {preferred_counts}, max={max_preferred_count}, ties={count_of_max}, index={preferred_range_index}")
+    logger.info(f"Preferred counts by range: {preferred_counts}, max={max_preferred_count}, highlighted_indices={preferred_range_indices}")
     
     
     # Cars by source
@@ -1971,7 +1970,7 @@ def analytics():
     logger.info(f"Analytics - Passing avg_features={avg_features}, critical_features={len(config.get('critical_features', []))}")
     return render_template('analytics.html',
                          price_distribution=price_distribution,
-                         preferred_range_index=preferred_range_index,
+                         preferred_range_indices=preferred_range_indices,
                          sources=sources,
                          vehicle_types=vehicle_types,
                          recent_scrapes=recent_scrapes,
