@@ -313,7 +313,7 @@ class BaseScraper(ABC):
                 
                 session.commit()
                 self.logger.debug(f"Updated car: {existing_car.make} {existing_car.model}")
-                return existing_car
+                return existing_car, False
             
             else:
                 # Create new car - filter out fields that don't exist in the model
@@ -338,12 +338,12 @@ class BaseScraper(ABC):
                 except Exception as e:
                     self.logger.error(f"Error checking for top match notification: {e}")
                 
-                return new_car
+                return new_car, True
         
         except Exception as e:
             session.rollback()
             self.logger.error(f"Error saving car to database: {e}")
-            return None
+            return None, False
         
         finally:
             session.close()
@@ -911,11 +911,11 @@ class BaseScraper(ABC):
                                 car_data['has_all_required_features'] = has_all
                                 
                                 # Save to database
-                                result = self._save_car_to_db(car_data)
+                                car, is_new = self._save_car_to_db(car_data)
                                 
-                                if result:
+                                if car:
                                     cars_found += 1
-                                    if result.first_seen == result.last_seen:
+                                    if is_new:
                                         cars_new += 1
                                     else:
                                         cars_updated += 1
