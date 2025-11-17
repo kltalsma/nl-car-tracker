@@ -20,7 +20,6 @@ import os
 import unicodedata
 from typing import List, Dict, Optional
 from models.database import Car, PriceHistory, ScraperLog, Database
-from utils.email_notifier import EmailNotifier
 
 # Logging is configured in run_scraper.py - do not reconfigure here
 
@@ -44,13 +43,6 @@ class BaseScraper(ABC):
         
         # Initialize database
         self.db = Database(db_path)
-        
-        # Initialize email notifier
-        try:
-            self.email_notifier = EmailNotifier(config_path)
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize email notifier: {e}")
-            self.email_notifier = None
         
         # Browser driver (initialized when needed)
         self.driver = None
@@ -332,11 +324,6 @@ class BaseScraper(ABC):
                 session.commit()
                 self.logger.info(f"New car added: {new_car.make} {new_car.model} - €{new_car.price}")
                 
-                # Check if this is a top match and send email notification
-                try:
-                    self._check_and_notify_top_match(new_car)
-                except Exception as e:
-                    self.logger.error(f"Error checking for top match notification: {e}")
                 
                 return new_car
         
@@ -755,66 +742,6 @@ class BaseScraper(ABC):
         
         return score
     
-    def _check_and_notify_top_match(self, car):
-        """
-        Check if a new car is a top match and send email notification
-        
-        Args:
-            car: The Car object to check
-        """
-        # Skip if email notifier is not available
-        if not self.email_notifier:
-            return
-        
-        # Skip if email notifications are disabled
-        notifications_config = self.config.get('notifications', {}).get('email', {})
-        if not notifications_config.get('enabled', False):
-            return
-        
-        if not notifications_config.get('notify_on_top_match', False):
-            return
-        
-        # Calculate score
-        score = self._calculate_car_score(car)
-        
-        # Get threshold from config
-        min_score = notifications_config.get('min_score_for_notification', 85)
-        
-        # Check if score meets threshold (note: lower score = better match, so we use <=)
-        # Actually, looking at the scoring logic, higher scores are worse, so we need >= for notification
-        # Wait, I need to clarify: the score represents penalty points, so LOWER is better
-        # But the config says "min_score_for_notification: 85", which implies >= 85 should notify
-        # This is confusing. Let me check the app.py logic...
-        
-        # From app.py, I can see that lower score = better match
-        # So "min_score_for_notification: 85" likely means "notify if score is AT MOST 85"
-        # But that doesn't make semantic sense with "min_score"...
-        # Let me interpret it as: notify if score is good enough (low enough) - so score <= threshold
-        
-        if score <= min_score:
-            try:
-                # Build car details dict
-                car_details = {
-                    'make': car.make,
-                    'model': car.model,
-                    'year': car.year,
-                    'price': car.price,
-                    'mileage_km': car.mileage_km,
-                    'fuel_type': car.fuel_type,
-                    'vehicle_type': car.vehicle_type,
-                    'electric_range_km': car.electric_range_km,
-                    'url': car.listing_url,
-                    'location': f"{car.location_city}, {car.location_province}" if car.location_city and car.location_province else (car.location_city or car.location_province or 'Unknown'),
-                    'distance_from_heerenveen_km': car.distance_from_heerenveen_km,
-                    'source_website': car.source_website
-                }
-                
-                self.email_notifier.send_top_match_notification(car_details, score)
-                self.logger.info(f"Sent top match notification for {car.make} {car.model} (score: {score:.1f})")
-            except Exception as e:
-                self.logger.error(f"Failed to send top match notification: {e}")
-    
-    @abstractmethod
     def build_search_url(self) -> List[str]:
         """
         Build search URL(s) for the website based on config criteria
@@ -903,6 +830,26 @@ class BaseScraper(ABC):
                                     self.logger.info(f"Skipping benzine/diesel car: {car_data.get('make')} {car_data.get('model')} (fuel_type: {fuel_type})")
                                     continue
                                 
+                                # Apply feature inference to enrich incomplete data
+                                from utils.feature_inference import infer_features
+                                
+                                original_features = car_data.get('features', [])
+                                original_count = len([f for f in original_features if f])
+                                
+                                # Infer additional features
+                                enriched_features, inferred_count = infer_features(car_data, original_features)
+                                car_data['features'] = enriched_features
+                                
+                                # Log inference results
+                                if inferred_count > 0:
+                                    make = car_data.get('make', 'Unknown')
+                                    model = car_data.get('model', 'Unknown')
+                                    self.logger.info(
+                                        f"Feature inference: {make} {model} - "
+                                        f"{original_count} scraped + {inferred_count} inferred = {len(enriched_features)} total"
+                                    )
+                                
+
                                 # Check required features
                                 features_count, has_all = self._check_required_features(
                                     car_data.get('features', [])
