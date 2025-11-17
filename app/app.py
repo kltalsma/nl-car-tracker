@@ -1401,7 +1401,7 @@ def my_matches():
     
     # Split into three tiers based on critical features count
     # Tier 1: Perfect Matches (8/8 critical features)
-    # Tier 2: Great Matches (6-7/8 critical features)
+    # Tier 2: Great Matches (8+ critical features)
     # Tier 3: Good Matches (4-5/8 critical features)
     # Below 4: Not shown (too many missing features)
     
@@ -1415,7 +1415,7 @@ def my_matches():
         
         if item['dealbreakers_met']:  # 8/8
             perfect_matches.append(item)
-        elif features_met >= 6:  # 6-7/8
+        elif features_met >= 8:  # 8+/critical
             great_matches.append(item)
         elif features_met >= 4:  # 4-5/8
             good_matches.append(item)

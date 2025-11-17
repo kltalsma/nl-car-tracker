@@ -850,12 +850,16 @@ class BaseScraper(ABC):
                                     )
                                 
 
-                                # Check required features
+                                # Check required features (critical ones)
                                 features_count, has_all = self._check_required_features(
                                     car_data.get('features', [])
                                 )
                                 car_data['features_count'] = features_count
                                 car_data['has_all_required_features'] = has_all
+                                
+                                # Store total feature count (all features including inferred)
+                                all_features = car_data.get('features', [])
+                                car_data['total_features_count'] = len([f for f in all_features if f])
                                 
                                 # Save to database
                                 result = self._save_car_to_db(car_data)

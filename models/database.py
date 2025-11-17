@@ -51,6 +51,7 @@ class Car(Base):
     # Features (stored as JSON array)
     features = Column(JSON)  # List of feature strings
     features_count = Column(Integer, default=0, index=True)  # Count of required features present
+    total_features_count = Column(Integer, default=0, index=True)  # Total count of all features (scraped + inferred)
     has_all_required_features = Column(Boolean, default=False, index=True)
     
     # Additional Details

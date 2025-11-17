@@ -172,6 +172,7 @@ vehicle_classification:
     - Qashqai
     - Juke
     - Townstar
+    - Ariya
     Mazda:
     - CX-30
     - MX-30
@@ -298,6 +299,7 @@ critical_features:
 - Parkeerhulp automatisch
 - Verkeersbordherkenning
 - DAB+ radio
+- Lane Assist
 nice_to_have_features:
 - Trekhaak
 - Hill-Hold Control
