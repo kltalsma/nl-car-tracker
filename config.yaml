@@ -235,6 +235,7 @@ vehicle_classification:
     - E Soul
     - Soul e-Soul
     - e-Soul
+    Aiways: []
 search_criteria:
   min_price: 15000
   max_price: 35000
@@ -280,7 +281,7 @@ search:
   min_seats: 5
   location:
     center: Heerenveen
-    radius_km: 100
+    radius_km: 80
 critical_features:
 - Cruise Control
 - Android Auto
@@ -393,3 +394,9 @@ trade_in_checker:
   enabled: true
   check_interval_hours: 168
   autoscout24_url: https://www.autoscout24.nl/waardebepaling/
+
+# Distance filtering
+distance_filter:
+  max_distance_km: 80  # Maximum distance from Heerenveen for regular cars
+  preferred_car_max_distance_km: 150  # Allow preferred cars to be further away
+  enforce_during_scraping: true  # Skip cars during scraping if too far (saves DB space)

@@ -175,7 +175,8 @@ class BaseScraper(ABC):
             car_data: Dictionary containing car information
             
         Returns:
-            Car object if saved/updated, None otherwise
+            Tuple of (Car object, was_new_car: bool) if saved/updated, (None, False) otherwise.
+            was_new_car is True only if this car was newly created (not an update).
         """
         from utils.helpers import get_wltp_range, get_ev_database_range, get_boot_space
         
@@ -305,7 +306,7 @@ class BaseScraper(ABC):
                 
                 session.commit()
                 self.logger.debug(f"Updated car: {existing_car.make} {existing_car.model}")
-                return existing_car
+                return (existing_car, False)  # Existing car updated
             
             else:
                 # Create new car - filter out fields that don't exist in the model
@@ -325,12 +326,12 @@ class BaseScraper(ABC):
                 self.logger.info(f"New car added: {new_car.make} {new_car.model} - €{new_car.price}")
                 
                 
-                return new_car
+                return (new_car, True)  # New car created
         
         except Exception as e:
             session.rollback()
             self.logger.error(f"Error saving car to database: {e}")
-            return None
+            return (None, False)
         
         finally:
             session.close()
@@ -623,6 +624,53 @@ class BaseScraper(ABC):
         has_all = matching_count == len(critical_features)
         return matching_count, has_all
     
+    
+    def _should_skip_by_distance(self, car_data: Dict) -> tuple[bool, str]:
+        """
+        Check if a car should be skipped based on distance from Heerenveen
+        
+        Args:
+            car_data: Dictionary containing car information including distance
+            
+        Returns:
+            Tuple of (should_skip: bool, reason: str)
+        """
+        # Check if distance filtering is enabled
+        distance_config = self.config.get('distance_filter', {})
+        if not distance_config.get('enforce_during_scraping', False):
+            return (False, '')
+        
+        # Get distance from car data
+        distance = car_data.get('distance_from_heerenveen_km')
+        if distance is None:
+            # No distance info - allow the car (distance will be calculated later)
+            return (False, '')
+        
+        # Check if this is a preferred car
+        preferred_config = self.config.get('preferred_cars', {})
+        preferred_makes = [m.lower() for m in preferred_config.get('makes', [])]
+        preferred_models = [m.lower() for m in preferred_config.get('models', [])]
+        
+        car_make = car_data.get('make', '').lower()
+        car_model = car_data.get('model', '').lower()
+        
+        is_preferred = (car_make in preferred_makes or 
+                       any(pm in car_model for pm in preferred_models))
+        
+        # Get max distance based on preference
+        if is_preferred:
+            max_distance = distance_config.get('preferred_car_max_distance_km', 150)
+        else:
+            max_distance = distance_config.get('max_distance_km', 80)
+        
+        # Check if car is too far
+        if distance > max_distance:
+            car_type = 'preferred' if is_preferred else 'regular'
+            reason = f'Too far: {distance:.0f}km (max {max_distance}km for {car_type} cars)'
+            return (True, reason)
+        
+        return (False, '')
+    
     def _calculate_car_score(self, car) -> float:
         """
         Calculate a score for a car based on critical features, price, odometer, range, and age.
@@ -830,6 +878,13 @@ class BaseScraper(ABC):
                                     self.logger.info(f"Skipping benzine/diesel car: {car_data.get('make')} {car_data.get('model')} (fuel_type: {fuel_type})")
                                     continue
                                 
+                                # Check distance filter (skip cars too far away unless preferred)
+                                should_skip, skip_reason = self._should_skip_by_distance(car_data)
+                                if should_skip:
+                                    self.logger.info(f'Skipping car: {car_data.get("make")} {car_data.get("model")} - {skip_reason}')
+                                    continue
+                                
+                                
                                 # Apply feature inference to enrich incomplete data
                                 from utils.feature_inference import infer_features
                                 
@@ -864,9 +919,9 @@ class BaseScraper(ABC):
                                 # Save to database
                                 result = self._save_car_to_db(car_data)
                                 
-                                if result:
+                                if result[0]:  # result is now a tuple (car, was_new)
                                     cars_found += 1
-                                    if result.first_seen == result.last_seen:
+                                    if result[1]:  # Use the was_new flag instead of timestamp comparison
                                         cars_new += 1
                                     else:
                                         cars_updated += 1
