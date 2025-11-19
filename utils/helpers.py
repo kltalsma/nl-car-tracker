@@ -120,9 +120,9 @@ def get_coordinates(location: str) -> Optional[Tuple[float, float]]:
     try:
         # Add Netherlands to improve accuracy
         search_query = f"{location}, Netherlands"
-        # Reduced timeout from 10s to 3s to minimize impact of failures
-        # With 2 retries at urllib3 level, max wait time is ~9s instead of ~30s
-        result = geolocator.geocode(search_query, timeout=3)  # type: ignore
+        # Increased timeout to 10s to prevent ReadTimeoutError
+        # With 2 retries at urllib3 level, max wait time is ~30s
+        result = geolocator.geocode(search_query, timeout=10)  # type: ignore
         
         if result:
             coords = (result.latitude, result.longitude)  # type: ignore
@@ -267,6 +267,11 @@ def extract_city_from_address(address: str) -> Optional[str]:
     # 1. "Street 123, 1234AB, CITY" or "Street 123, 1234 AB, CITY"
     # 2. "1234AB CITY" or "1234 AB CITY"
     # 3. "CITY" (just city name)
+    # 4. "Neem vooraf telefonisch contact met ons op:+31850003358, 1101 CL, AMSTERDAM"
+    
+    # First, clean up phone numbers and contact info
+    # Remove phone-related text: "Neem ... contact ... op: +31..."
+    address = re.sub(r'[Nn]eem\s+.*?\s+contact\s+.*?:\s*\+?\d[\d\s\-]+,?\s*', '', address)
     
     # Try pattern: comma-separated parts with postal code
     # Look for postal code (4 digits + 2 letters) followed by city
@@ -284,14 +289,14 @@ def extract_city_from_address(address: str) -> Optional[str]:
         last_part = parts[-1].strip()
         # Remove postal code if present at start
         last_clean = re.sub(r'^[1-9]\d{3}\s*[A-Z]{2}\s*', '', last_part).strip()
-        if last_clean and not last_clean[0].isdigit():
+        if last_clean and not last_clean[0].isdigit() and len(last_clean) > 2:
             return last_clean
         
         # Try second to last part
         if len(parts) >= 3:
             second_last = parts[-2].strip()
             second_clean = re.sub(r'^[1-9]\d{3}\s*[A-Z]{2}\s*', '', second_last).strip()
-            if second_clean and not second_clean[0].isdigit():
+            if second_clean and not second_clean[0].isdigit() and len(second_clean) > 2:
                 return second_clean
     
     # Fallback: remove street address and postal code from beginning
