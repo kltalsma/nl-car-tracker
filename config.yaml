@@ -167,6 +167,7 @@ vehicle_classification:
     - Yaris
     - Yaris Cross
     - Prius
+    - bZ4X
     Nissan:
     - Leaf
     - Qashqai
@@ -226,6 +227,8 @@ vehicle_classification:
     - E-Car
     Dacia:
     - Spring
+    Seres: []
+    Man: []
     smart: []
     'smart #1': []
     Peugot:
@@ -235,13 +238,14 @@ vehicle_classification:
     - E Soul
     - Soul e-Soul
     - e-Soul
+    Maxus: []
 search_criteria:
   min_price: 15000
   max_price: 35000
   min_year: 2020
   acceptable_year: 2020
-  max_mileage_km: 150000
-  max_mileage_acceptable: 150000
+  max_mileage_km: 100000
+  max_mileage_acceptable: 100000
   min_doors: 4
   min_seats: 5
 preferred_cars:
@@ -274,7 +278,7 @@ search:
     min_range_km: 300
   - type: PHEV
     min_electric_range_km: 30
-  max_mileage_km: 150000
+  max_mileage_km: 100000
   min_year: 2020
   min_storage_capacity_liters: 400
   min_seats: 5

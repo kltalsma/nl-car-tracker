@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "components/unified_sidebar.html" import render_sidebar %}
 
-{% block title %}Auto's - T.A.L.S.M.A.-S.C.H.A.A.P.{% endblock %}
+{% block title %}Car Listings - NL Car Tracker{% endblock %}
 
 {% block content %}
 <div class="row">
@@ -13,8 +13,8 @@
     <!-- Main content area with car listings -->
     <div class="col-md-9">
         <div class="d-flex justify-content-between align-items-center mb-3">
-            <h3><i class="bi bi-car-front"></i> Auto's</h3>
-            <span class="badge bg-secondary">{{ total_cars }} resultaten</span>
+            <h3><i class="bi bi-car-front"></i> Car Listings</h3>
+            <span class="badge bg-secondary">{{ total_cars }} results</span>
         </div>
 
         {% if cars %}
@@ -30,8 +30,8 @@
                         
                         {% if trade_in_value %}
                         <div class="mb-2 small text-success">
-                            <i class="bi bi-cash-coin"></i> Netto kosten: €{{ "{:,.0f}".format(car.price - trade_in_value) }}
-                            <small class="text-muted">(na €{{ "{:,.0f}".format(trade_in_value) }} inruil)</small>
+                            <i class="bi bi-cash-coin"></i> Net cost: €{{ "{:,.0f}".format(car.price - trade_in_value) }}
+                            <small class="text-muted">(after €{{ "{:,.0f}".format(trade_in_value) }} trade-in)</small>
                         </div>
                         {% endif %}
                         
@@ -45,23 +45,23 @@
                                 {% set primary_range = car.ad_listed_range_km or car.electric_range_km or car.range_km %}
                                 {% if car.fuel_type == 'PHEV' %}
                                     {% if primary_range %}
-                                        {{ primary_range }} km elektrisch bereik
+                                        {{ primary_range }} km electric range
                                         {% if primary_range < 40 %}
                                         <span class="badge bg-warning text-dark ms-1" title="Low electric range">⚠️</span>
                                         {% endif %}
                                     {% else %}
-                                        <span class="text-muted">Bereik niet beschikbaar</span>
+                                        <span class="text-muted">Range not available</span>
                                     {% endif %}
                                 {% else %}
                                     <div class="small">
                                         {% if car.battery_size %}
-                                            <strong>Batterij:</strong> {{ car.battery_size }} kWh<br>
+                                            <strong>Battery:</strong> {{ car.battery_size }} kWh<br>
                                         {% endif %}
                                         {% set ad_range = car.electric_range_km or car.ad_listed_range_km %}
                                         {% if ad_range %}
-                                        <strong>Advertentie:</strong> {{ ad_range }} km<br>
+                                        <strong>Listed in ad:</strong> {{ ad_range }} km<br>
                                         {% endif %}
-                                        <strong>WLTP (Officieel):</strong> 
+                                        <strong>WLTP (Official):</strong> 
                                         {% if car.wltp_reference_range_km %}
                                             {{ car.wltp_reference_range_km }} km
                                             {% if ad_range and car.wltp_reference_range_km < ad_range * 0.85 %}
@@ -73,7 +73,7 @@
                                             <span class="text-muted">-</span>
                                         {% endif %}
                                         <br>
-                                        <strong>Praktijk:</strong> 
+                                        <strong>Real-world:</strong> 
                                         {% if car.ev_db_range %}
                                             City {{ car.ev_db_range.city_mild|int }} / Hwy {{ car.ev_db_range.highway_mild|int }} km <span class="badge bg-secondary" title="EV-Database mild weather estimate">est.</span>
                                         {% elif car.evdb_real_range_km %}
@@ -84,7 +84,7 @@
                                             <span class="text-muted">-</span>
                                         {% endif %}
                                         <br>
-                                        <strong>Trekken (750-1000kg):</strong> 
+                                        <strong>Towing (750-1000kg):</strong> 
                                         {% if car.towing_range %}
                                             ~{{ car.towing_range.estimated_range_km|int }} km <span class="badge bg-secondary" title="{{ car.towing_range.source }} -{{ car.towing_range.reduction_percent }}%">est.</span>
                                         {% else %}
@@ -99,17 +99,17 @@
                                 {% if car.location_city %}
                                     {{ car.location_city }}
                                     {% if car.distance_from_heerenveen_km %}
-                                         <span class="text-muted">({{ car.distance_from_heerenveen_km | format_distance }} rijden)</span>
+                                        <span class="text-muted">({{ car.distance_from_heerenveen_km | format_distance }} drive)</span>
                                     {% endif %}
                                 {% elif car.distance_from_heerenveen_km %}
-                                    {{ car.distance_from_heerenveen_km | format_distance }} vanaf Heerenveen
+                                    {{ car.distance_from_heerenveen_km | format_distance }} from Heerenveen
                                 {% else %}
-                                    <span class="text-muted">Locatie niet beschikbaar</span>
+                                    <span class="text-muted">Location not available</span>
                                 {% endif %}
                             </div>
                             {% if car.storage_capacity_liters %}
                             <div class="mb-1">
-                                <i class="bi bi-box-seam text-muted"></i> {{ car.storage_capacity_liters }}L kofferbak
+                                <i class="bi bi-box-seam text-muted"></i> {{ car.storage_capacity_liters }}L boot
                             </div>
                             {% endif %}
                         </div>
@@ -117,10 +117,23 @@
                         {% if car.has_all_required_features %}
                         <div class="mb-2">
                             <span class="badge badge-perfect">
-                                <i class="bi bi-check-circle-fill"></i> Alle Functies
+                                <i class="bi bi-check-circle-fill"></i> All Features
                             </span>
                             {% if car.score %}
-                            <span class="badge bg-info">
+                            <span class="badge bg-info" 
+                                  {% if car.score_breakdown %}
+                                  data-bs-toggle="tooltip" 
+                                  data-bs-html="true"
+                                  data-bs-placement="top"
+                                  title="<strong>Score Breakdown:</strong><br>
+                                         Critical Features: {{ '%.1f'|format(car.score_breakdown["critical_features"]["weighted"]) }}/45<br>
+                                         Price: {{ '%.1f'|format(car.score_breakdown["price"]["weighted"]) }}/20<br>
+                                         Mileage: {{ '%.1f'|format(car.score_breakdown["mileage"]["weighted"]) }}/15<br>
+                                         Distance: {{ '%.1f'|format(car.score_breakdown["distance"]["weighted"]) }}/10<br>
+                                         Age: {{ '%.1f'|format(car.score_breakdown["age"]["weighted"]) }}/5<br>
+                                         Range: {{ '%.1f'|format(car.score_breakdown["range"]["weighted"]) }}/5<br>
+                                         {% if car.score_breakdown.get("bonuses", []) %}Bonuses: {% for bonus in car.score_breakdown.get("bonuses", []) %}{{ bonus.name }} (+{{ '%.1f'|format(bonus.value) }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}"
+                                  {% endif %}>
                                 Score: {{ "%.1f"|format(car.score) }}
                             </span>
                             {% endif %}
@@ -128,10 +141,23 @@
                         {% else %}
                         <div class="mb-2">
                             <span class="badge badge-partial">
-                                {{ car.features_count }}/9 Functies
+                                {{ car.features_count }}/9 Features
                             </span>
                             {% if car.score %}
-                            <span class="badge bg-secondary">
+                            <span class="badge bg-secondary"
+                                  {% if car.score_breakdown %}
+                                  data-bs-toggle="tooltip" 
+                                  data-bs-html="true"
+                                  data-bs-placement="top"
+                                  title="<strong>Score Breakdown:</strong><br>
+                                         Critical Features: {{ '%.1f'|format(car.score_breakdown["critical_features"]["weighted"]) }}/45<br>
+                                         Price: {{ '%.1f'|format(car.score_breakdown["price"]["weighted"]) }}/20<br>
+                                         Mileage: {{ '%.1f'|format(car.score_breakdown["mileage"]["weighted"]) }}/15<br>
+                                         Distance: {{ '%.1f'|format(car.score_breakdown["distance"]["weighted"]) }}/10<br>
+                                         Age: {{ '%.1f'|format(car.score_breakdown["age"]["weighted"]) }}/5<br>
+                                         Range: {{ '%.1f'|format(car.score_breakdown["range"]["weighted"]) }}/5<br>
+                                         {% if car.score_breakdown.get("bonuses", []) %}Bonuses: {% for bonus in car.score_breakdown.get("bonuses", []) %}{{ bonus.name }} (+{{ '%.1f'|format(bonus.value) }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}"
+                                  {% endif %}>
                                 Score: {{ "%.1f"|format(car.score) }}
                             </span>
                             {% endif %}
@@ -140,16 +166,16 @@
                         
                         <div class="d-grid gap-2 mt-3">
                             <a href="/car/{{ car.id }}" class="btn btn-primary btn-sm">
-                                <i class="bi bi-info-circle"></i> Bekijk Details
+                                <i class="bi bi-info-circle"></i> View Details
                             </a>
                             <a href="{{ car.listing_url }}" target="_blank" class="btn btn-outline-secondary btn-sm">
-                                <i class="bi bi-box-arrow-up-right"></i> Bekijk op {{ car.source_website }}
+                                <i class="bi bi-box-arrow-up-right"></i> View on {{ car.source_website }}
                             </a>
                         </div>
                     </div>
                     <div class="card-footer">
                         <small class="text-muted">
-                            Laatst gezien: {{ car.last_seen | format_datetime }}
+                            Last seen: {{ car.last_seen | format_datetime }}
                         </small>
                     </div>
                 </div>
@@ -163,7 +189,7 @@
             <ul class="pagination justify-content-center">
                 {% if page > 1 %}
                 <li class="page-item">
-                    <a class="page-link" href="?{{ request.query_string.decode() | replace('page=' ~ page, 'page=' ~ (page - 1)) }}">Vorige</a>
+                    <a class="page-link" href="?{{ request.query_string.decode() | replace('page=' ~ page, 'page=' ~ (page - 1)) }}">Previous</a>
                 </li>
                 {% endif %}
                 
@@ -175,7 +201,7 @@
                 
                 {% if page < total_pages %}
                 <li class="page-item">
-                    <a class="page-link" href="?{% for key, value in request.args.items() %}{% if key != 'page' %}{{ key }}={{ value }}&{% endif %}{% endfor %}page={{ page + 1 }}">Volgende</a>
+                    <a class="page-link" href="?{% for key, value in request.args.items() %}{% if key != 'page' %}{{ key }}={{ value }}&{% endif %}{% endfor %}page={{ page + 1 }}">Next</a>
                 </li>
                 {% endif %}
             </ul>
@@ -184,7 +210,7 @@
 
         {% else %}
         <div class="alert alert-info" role="alert">
-            <i class="bi bi-info-circle"></i> Geen auto's gevonden die voldoen aan je criteria. Probeer de filters aan te passen.
+            <i class="bi bi-info-circle"></i> No cars found matching your criteria. Try adjusting the filters.
         </div>
         {% endif %}
     </div>
@@ -194,6 +220,12 @@
 {% block extra_js %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // Initialize Bootstrap tooltips for score breakdowns
+    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+    
     const makeFilter = document.getElementById('makeFilter');
     
     // When make selection changes, submit the form to reload models

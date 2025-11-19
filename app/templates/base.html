@@ -88,13 +88,11 @@
                             <i class="bi bi-star-fill"></i> Top Matches
                         </a>
                     </li>
-                    {% if current_user.is_authenticated and current_user.username != 'gast' %}
                     <li class="nav-item">
                         <a class="nav-link" href="/trade-in-value">
                             <i class="bi bi-cash-coin"></i> Inruilwaarde
                         </a>
                     </li>
-                    {% endif %}
                     <li class="nav-item">
                         <a class="nav-link" href="/analytics">
                             <i class="bi bi-graph-up"></i> Analytics
@@ -105,13 +103,11 @@
                             <i class="bi bi-x-circle"></i> Niet Beschikbaar
                         </a>
                     </li>
-                    {% if current_user.is_authenticated and current_user.is_admin %}
                     <li class="nav-item">
                         <a class="nav-link" href="/admin">
                             <i class="bi bi-gear-fill"></i> Beheer
                         </a>
                     </li>
-                    {% endif %}
                     <li class="nav-item">
                         <a class="nav-link" href="/logout">
                             <i class="bi bi-box-arrow-right"></i> Uitloggen
