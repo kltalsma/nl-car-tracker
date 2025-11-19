@@ -47,13 +47,25 @@
                 {% endif %}
             </p>
             
-            <div class="price-tag mb-3">{{ car.price | format_price }}</div>
-            
+            {# Price Display - Option A: Net Cost Primary #}
             {% if trade_in_value %}
-            <div class="mb-3" style="background-color: #d1f2eb; border-left: 3px solid #28a745; padding: 8px; border-radius: 4px;">
-                <small><i class="bi bi-cash-stack text-success"></i> <strong>Net cost: €{{ "{:,}".format(car.price - trade_in_value) }}</strong></small><br>
-                <small class="text-muted">(after €{{ "{:,}".format(trade_in_value) }} trade-in)</small>
+            <div class="mb-3">
+                <div class="text-uppercase small fw-bold text-muted mb-1">NET COST</div>
+                <div class="price-tag mb-2">€{{ "{:,}".format(car.price - trade_in_value) }}</div>
+                <hr class="my-2" style="border-color: var(--border-color);">
+                <div class="small text-muted">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span>List Price:</span>
+                        <span>€{{ "{:,}".format(car.price) }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span>Trade-in:</span>
+                        <span class="text-success fw-bold">-€{{ "{:,}".format(trade_in_value) }}</span>
+                    </div>
+                </div>
             </div>
+            {% else %}
+            <div class="price-tag mb-3">{{ car.price | format_price }}</div>
             {% endif %}
             
             <div class="mb-2 small">
