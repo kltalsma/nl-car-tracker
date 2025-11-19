@@ -6,15 +6,22 @@ services:
     ports:
       - "5001:5002"
     volumes:
+      # Mount all code directories directly into /app
+      - ./app:/app/app
+      - ./scrapers:/app/scrapers
+      - ./models:/app/models
+      - ./utils:/app/utils
+      - ./migrations:/app/migrations
+      - ./scripts:/app/scripts
       - ./data:/app/data
       - ./logs:/app/logs
       - ./config.yaml:/app/config.yaml
-      - /var/run/docker.sock:/var/run/docker.sock  # Allow Docker control from container
-      - .:/app/project_root  # Mount project root for docker-compose access
+      - ./run_scraper.py:/app/run_scraper.py
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - FLASK_ENV=production
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
-      - DISABLE_SCHEDULER=true  # Web container only serves dashboard, scraper container handles scraping
+      - DISABLE_SCHEDULER=true
     command: python app/app.py
     restart: unless-stopped
     stop_grace_period: 30s
@@ -26,9 +33,17 @@ services:
     build: .
     container_name: nl-car-tracker-scraper
     volumes:
+      # Mount all code directories directly into /app
+      - ./app:/app/app
+      - ./scrapers:/app/scrapers
+      - ./models:/app/models
+      - ./utils:/app/utils
+      - ./migrations:/app/migrations
+      - ./scripts:/app/scripts
       - ./data:/app/data
       - ./logs:/app/logs
       - ./config.yaml:/app/config.yaml
+      - ./run_scraper.py:/app/run_scraper.py
     environment:
       - PYTHONUNBUFFERED=1
     command: python run_scraper.py

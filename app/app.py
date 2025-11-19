@@ -1725,8 +1725,11 @@ def top_matches():
     
     # Get critical features info for all top matches
     critical_features_info = {}
-    for car in full_electric + phev:
+    # Include both top matches AND Heerenveen matches
+    all_cars_to_display = full_electric + phev + heerenveen_full_electric + heerenveen_phev
+    for car in all_cars_to_display:
         critical_features_info[car.id] = check_critical_features(car, config)
+
     
     # Get unique makes and models for filter dropdowns
     available_makes = session.query(Car.make).filter(Car.is_available == True).distinct().order_by(Car.make).all()
