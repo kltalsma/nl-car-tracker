@@ -7,10 +7,11 @@ import os
 # Add parent directory to path to import models
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
-from flask_login import login_required, logout_user, login_user
-from app.auth import init_auth, check_credentials, User
-from models.database import Database, Car, PriceHistory, ScraperLog
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
+from models.database import Database, Car, PriceHistory, ScraperLog, User
 from sqlalchemy import desc, func, or_, case
 from datetime import datetime, timedelta
 from utils.helpers import match_required_features, should_exclude_vehicle, get_boot_space, get_ev_database_range, get_wltp_range, extract_battery_size, calculate_towing_range, find_duplicate_cars
@@ -27,6 +28,45 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
+# Initialize Flask-Login
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+login_manager.login_message = 'Please log in to access this page.'
+login_manager.login_message_category = 'info'
+
+@login_manager.user_loader
+def load_user(user_id):
+    """Load user by ID for Flask-Login"""
+    session = db.get_session()
+    try:
+        user = session.query(User).filter_by(id=int(user_id), is_active=True).first()
+        if user:
+            # Make User class compatible with Flask-Login
+            user.is_authenticated = True
+            user.is_active = True
+            user.is_anonymous = False
+            user.get_id = lambda: str(user.id)
+        return user
+    except Exception as e:
+        logger.error(f"User loading error: {e}")
+        return None
+    finally:
+        session.close()
+
+def admin_required(f):
+    """Decorator to require admin privileges for a route"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return login_manager.unauthorized()
+        if not current_user.is_admin:
+            flash('You do not have permission to access this page.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 
 # Load configuration
 config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.yaml')
@@ -116,7 +156,6 @@ def initialize_current_car_from_config():
                 initial_purchase_price=current_car_config.get('initial_purchase_price'),
                 purchase_date=purchase_date,
                 average_km_per_year=current_car_config.get('average_km_per_year'),
-                purchase_mileage_km=current_car_config.get('purchase_mileage_km'),
                 estimated_new_price=current_car_config.get('estimated_new_price')
             )
             session.add(current_car)
@@ -165,16 +204,13 @@ def initialize_current_car_from_config():
                 existing_car.average_km_per_year = current_car_config.get('average_km_per_year')
                 updated = True
             
-            
-            # Update purchase_mileage_km if provided
-            if current_car_config.get("purchase_mileage_km") and existing_car.purchase_mileage_km != current_car_config.get("purchase_mileage_km"):
-                existing_car.purchase_mileage_km = current_car_config.get("purchase_mileage_km")
-                updated = True
-            
             # Update estimated_new_price if provided
-            if current_car_config.get("estimated_new_price") and existing_car.estimated_new_price != current_car_config.get("estimated_new_price"):
-                existing_car.estimated_new_price = current_car_config.get("estimated_new_price")
-                updated = True
+            if current_car_config.get('estimated_new_price'):
+                current_estimated = getattr(existing_car, 'estimated_new_price', None)
+                if current_estimated != current_car_config.get('estimated_new_price'):
+                    existing_car.estimated_new_price = current_car_config.get('estimated_new_price')
+                    updated = True
+            
             if updated:
                 session.commit()
                 logger.info(f"Updated current car from config: {license_plate}")
@@ -551,12 +587,12 @@ else:
     logger.info("Background scheduler is disabled in config.yaml")
 
 
-def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False):
+def calculate_car_score(car, config, distance_weight=0.1):
     """
-    Calculate a numeric score for a car based on multiple factors.
-    Lower score = better car.
+    Calculate a score for a car based on critical features, price, odometer, range, age, and distance.
+    Lower score = better match
     
-    Scoring breakdown (penalties - higher numbers are worse):
+    Scoring weights (default):
     - Critical Features: 45% (missing features increase score)
     - Price: 20% (lower is better)
     - Odometer: 15% (lower is better)
@@ -573,18 +609,8 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         car: Car object to score
         config: Configuration dictionary
         distance_weight: Weight for distance scoring (default 0.1 = 10%, can be increased for stronger local preference)
-        return_breakdown: If True, returns tuple of (score, breakdown_dict)
     """
     score = 0
-    breakdown = {
-        'critical_features': {'raw': 0, 'weighted': 0, 'details': {}},
-        'price': {'raw': 0, 'weighted': 0},
-        'mileage': {'raw': 0, 'weighted': 0},
-        'age': {'raw': 0, 'weighted': 0},
-        'distance': {'raw': 0, 'weighted': 0},
-        'range': {'raw': 0, 'weighted': 0},
-        'bonuses': []
-    }
     
     # CRITICAL FEATURES (45% weight - important but not disqualifying)
     critical_features = check_critical_features(car, config)
@@ -594,16 +620,9 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         # Base features score - simple ratio of missing features
         missing_critical = sum(1 for has_it in critical_features.values() if not has_it)
         features_score = (missing_critical / total_critical) * 100
-        weighted_features = features_score * 0.45
-        score += weighted_features
-        breakdown['critical_features']['raw'] = features_score
-        breakdown['critical_features']['weighted'] = weighted_features
-        breakdown['critical_features']['details'] = critical_features.copy()
+        score += features_score * 0.45
     else:
-        weighted_features = 50 * 0.45
-        score += weighted_features  # Moderate penalty for no features data
-        breakdown['critical_features']['raw'] = 50
-        breakdown['critical_features']['weighted'] = weighted_features
+        score += 50 * 0.45  # Moderate penalty for no features data
     
     # Check for trekhaak for bonus later
     has_trekhaak = critical_features.get('Trekhaak', False) if critical_features else False
@@ -627,29 +646,17 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
     if car.price:
         max_price = 50000
         price_score = min((car.price / max_price) * 100, 100)
-        weighted_price = price_score * 0.2
-        score += weighted_price
-        breakdown['price']['raw'] = price_score
-        breakdown['price']['weighted'] = weighted_price
+        score += price_score * 0.2
     else:
-        weighted_price = 100 * 0.2
-        score += weighted_price  # Penalty for missing price
-        breakdown['price']['raw'] = 100
-        breakdown['price']['weighted'] = weighted_price
+        score += 100 * 0.2  # Penalty for missing price
     
     # Odometer score (normalize to 0-100 scale, max mileage = 150000)
     if car.mileage_km:
         max_odometer = 150000
         odometer_score = min((car.mileage_km / max_odometer) * 100, 100)
-        weighted_mileage = odometer_score * 0.15
-        score += weighted_mileage
-        breakdown['mileage']['raw'] = odometer_score
-        breakdown['mileage']['weighted'] = weighted_mileage
+        score += odometer_score * 0.15
     else:
-        weighted_mileage = 100 * 0.15
-        score += weighted_mileage  # Penalty for missing odometer
-        breakdown['mileage']['raw'] = 100
-        breakdown['mileage']['weighted'] = weighted_mileage
+        score += 100 * 0.15  # Penalty for missing odometer
     
     # Age score (normalize to 0-100 scale, reference year = 2025, max age = 10 years)
     if car.year:
@@ -657,15 +664,9 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         age = current_year - car.year
         max_age = 10
         age_score = min((age / max_age) * 100, 100)
-        weighted_age = age_score * 0.05
-        score += weighted_age
-        breakdown['age']['raw'] = age_score
-        breakdown['age']['weighted'] = weighted_age
+        score += age_score * 0.05
     else:
-        weighted_age = 100 * 0.05
-        score += weighted_age  # Penalty for missing year
-        breakdown['age']['raw'] = 100
-        breakdown['age']['weighted'] = weighted_age
+        score += 100 * 0.05  # Penalty for missing year
     
     # Distance score (normalize to 0-100 scale - LOCAL DEALER PREFERENCE!)
     # Favor cars from nearby dealers for easier maintenance access
@@ -679,15 +680,9 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         # 75-100 km: Far (75-100 points)
         # 100+ km: Very far (100+ points)
         distance_score = min(distance, 100)  # Cap at 100 for scoring purposes
-        weighted_distance = distance_score * distance_weight
-        score += weighted_distance
-        breakdown['distance']['raw'] = distance_score
-        breakdown['distance']['weighted'] = weighted_distance
+        score += distance_score * distance_weight
     else:
-        weighted_distance = 75 * distance_weight
-        score += weighted_distance  # Moderate penalty for missing distance (assume mid-range)
-        breakdown['distance']['raw'] = 75
-        breakdown['distance']['weighted'] = weighted_distance
+        score += 75 * distance_weight  # Moderate penalty for missing distance (assume mid-range)
     
     # Range score (normalize to 0-100 scale, higher is better, max range = 600km)
     # Use ad_listed_range_km (scraped from listings) with fallback to legacy field
@@ -798,14 +793,8 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         # Invert the score so higher range = lower score
         range_score = max(0, 100 - min((range_km / max_range) * 100, 100))
         score += range_score * 0.05
-        breakdown['range']['raw'] = range_score
-        breakdown['range']['weighted'] = range_score * 0.05
-        breakdown['range']['value'] = range_km
     else:
         score += 30 * 0.05  # Small penalty for missing range (assume decent 400km)
-        breakdown['range']['raw'] = 30
-        breakdown['range']['weighted'] = 30 * 0.05
-        breakdown['range']['value'] = None
     
     # ===== CONTENDER BONUSES =====
     # These bonuses can significantly boost a car's ranking
@@ -818,17 +807,14 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
     # BONUS 1: Full Electric SUV with 500+ km range is a STRONG contender
     if is_full_electric and is_suv and range_km and range_km >= 500:
         score -= 10  # Major bonus! (lower score = better)
-        breakdown['bonuses'].append({'name': 'Full Electric SUV 500+ km', 'value': -10})
     
-    # BONUS 2: PHEV/Hybrid with 100+ km electric range is a good contender
-    if is_phev_or_hybrid and range_km and range_km >= 100:
+    # BONUS 2: PHEV/Hybrid is a good contender
+    if is_phev_or_hybrid:
         score -= 5  # Good bonus!
-        breakdown['bonuses'].append({'name': 'PHEV/Hybrid 100+ km', 'value': -5})
     
     # BONUS 3: SUV or Station Wagon body style (family-friendly)
     if is_suv or is_stationwagon:
         score -= 5  # Prefer larger family-friendly vehicles
-        breakdown['bonuses'].append({'name': 'SUV/Station Wagon', 'value': -5})
     
     # BONUS 4: Preferred cars (based on config - Skoda Enyaq, Audi Q4, etc.)
     preferred_config = config.get('preferred_cars', {})
@@ -846,20 +832,18 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         
         if is_preferred_make or is_preferred_model:
             score -= 15  # Major bonus for preferred cars!
-            breakdown['bonuses'].append({'name': 'Preferred Car', 'value': -15})
         
         # Auto-prefer station wagons with 100+ km range
         if is_stationwagon and range_km and range_km >= auto_prefer_wagons_min_range:
             score -= 10  # Good bonus for practical wagons
-            breakdown['bonuses'].append({'name': f'Station Wagon {auto_prefer_wagons_min_range}+ km', 'value': -10})
     
+    # BONUS 5: Station wagon under 30k EUR - excellent value for families
+    if is_stationwagon and car.price and car.price < 30000:
+        score -= 8  # Strong bonus for affordable family cars!
     # Nice-to-have bonus: Trekhaak
     if has_trekhaak:
         score -= 5  # Small bonus for having towbar
-        breakdown['bonuses'].append({'name': 'Trekhaak', 'value': -5})
     
-    if return_breakdown:
-        return (score, breakdown)
     return score
 
 
@@ -944,30 +928,72 @@ def check_critical_features(car, config):
     return results
 
 
-
-@app.route("/login", methods=["GET", "POST"])
+logger.info("DEBUG: About to register login route")
+@app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
-        
-        if check_credentials(username, password):
-            user = User(username)
-            login_user(user)
-            next_page = request.args.get("next")
-            return redirect(next_page or url_for("index"))
-        else:
-            flash("Invalid username or password")
+    """Login page and handler"""
+    # Redirect if already logged in
+    if hasattr(current_user, 'is_authenticated') and current_user.is_authenticated:
+        return redirect(url_for('index'))
     
-    return render_template("login.html")
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        remember = request.form.get('remember', False)
+        
+        if not username or not password:
+            flash('Please enter both username and password.', 'danger')
+            return render_template('login.html')
+        
+        db_session = db.get_session()
+        try:
+            user = db_session.query(User).filter_by(username=username, is_active=True).first()
+            
+            if user and check_password_hash(user.password_hash, password):
+                # Update last login
+                user.last_login = datetime.utcnow()
+                db_session.commit()
+                
+                # Make user compatible with Flask-Login
+                user.is_authenticated = True
+                user.is_active = True
+                user.is_anonymous = False
+                user.get_id = lambda: str(user.id)
+                
+                # Log in the user
+                login_user(user, remember=remember)
+                
+                # Store username in session for compatibility
+                session['username'] = username
+                
+                flash(f'Welcome back, {username}!', 'success')
+                
+                # Redirect to next page or index
+                next_page = request.args.get('next')
+                if next_page:
+                    return redirect(next_page)
+                return redirect(url_for('index'))
+            else:
+                flash('Invalid username or password.', 'danger')
+        except Exception as e:
+            logger.error(f"Login error: {e}")
+            flash('An error occurred during login. Please try again.', 'danger')
+        finally:
+            db_session.close()
+    
+    return render_template('login.html')
+logger.info("DEBUG: Login route function defined")
 
-@app.route("/logout")
+@app.route('/logout')
 @login_required
 def logout():
+    """Logout current user"""
+    username = session.get('username', 'User')
     logout_user()
-    return redirect(url_for("login"))
+    session.clear()
+    flash(f'You have been logged out successfully, {username}.', 'info')
+    return redirect(url_for('login'))
 
-@login_required
 @app.route('/')
 @login_required
 def index():
@@ -985,7 +1011,7 @@ def index():
     min_year = request.args.get('min_year', type=int)
     max_year = request.args.get('max_year', type=int)
     min_price = request.args.get('min_price', type=float)
-    max_price = request.args.get('max_price', type=float)
+    max_price = request.args.get('max_price', type=float) or config.get('search_criteria', {}).get('max_price')
     min_mileage = request.args.get('min_mileage', type=int)
     max_mileage = request.args.get('max_mileage', type=int)
     max_distance = request.args.get('max_distance', type=float)
@@ -1085,24 +1111,19 @@ def index():
         car.battery_size = extract_battery_size(str(car.model))
         car.towing_range = calculate_towing_range(car, car.ev_db_range)
         
-        car.score, car.score_breakdown = calculate_car_score(car, config, return_breakdown=True)
+        car.score = calculate_car_score(car, config)
     
     # Get statistics for sidebar
-    # Calculate statistics for sidebar
-    max_price = config.get('search_criteria', {}).get('max_price', 35000)
     stats = {
-        'total_ever': session.query(Car).count(),
-        'total_available': session.query(Car).filter(Car.is_available == True).count(),
-        'within_budget': session.query(Car).filter(
-            Car.is_available == True,
-            Car.price <= max_price
-        ).count(),
+        'total_cars': session.query(Car).filter(Car.is_available == True).count(),
         'perfect_matches': session.query(Car).filter(
             Car.is_available == True,
             Car.has_all_required_features == True
         ).count(),
-        'avg_price': session.query(func.avg(Car.price)).filter(Car.is_available == True).scalar() or 0
+        'avg_price': session.query(func.avg(Car.price)).filter(Car.is_available == True).scalar() or 0,
+        'newest_car': session.query(func.max(Car.last_seen)).filter(Car.is_available == True).scalar()
     }
+    
     # Get unique makes and models for filter dropdowns
     available_makes = session.query(Car.make).filter(Car.is_available == True).distinct().order_by(Car.make).all()
     available_makes = [m[0] for m in available_makes if m[0]]
@@ -1208,7 +1229,7 @@ def my_matches():
     min_year = request.args.get('min_year', type=int)
     max_year = request.args.get('max_year', type=int)
     min_price = request.args.get('min_price', type=float)
-    max_price = request.args.get('max_price', type=float)
+    max_price = request.args.get('max_price', type=float) or config.get('search_criteria', {}).get('max_price')
     min_mileage = request.args.get('min_mileage', type=int)
     max_mileage = request.args.get('max_mileage', type=int)
     max_distance = request.args.get('max_distance', type=float)
@@ -1346,10 +1367,6 @@ def my_matches():
         
         # Check body style (prefer SUV/Station Wagon for family use)
         vehicle_type_str = str(car.vehicle_type).upper() if car.vehicle_type else ''
-        # Calculate score breakdown for tooltip
-        raw_score, score_breakdown = calculate_car_score(car, config, return_breakdown=True)
-        value_rating = convert_score_to_value_rating(raw_score)
-
         is_family_body_style = 'SUV' in vehicle_type_str or 'STATIONWAGON' in vehicle_type_str or 'STATION' in vehicle_type_str
         
         analyzed_cars.append({
@@ -1376,9 +1393,7 @@ def my_matches():
                 (20 if is_preferred_brand else 0) +  # Brand preference (increased boost)
                 (30 if is_preferred_model else 0) +  # Model preference (strong boost)
                 (5 if is_family_body_style else 0)  # SUV/Station Wagon preference
-            ),
-            'breakdown': score_breakdown,
-            'value_rating': value_rating
+            )
         })
     
     # Sort by match score (highest first), then by price (lowest first)
@@ -1418,21 +1433,6 @@ def my_matches():
         ).distinct().order_by(Car.model).all()
         available_models = [m[0] for m in available_models if m[0]]
     
-    # Calculate statistics for sidebar
-    max_price = config.get('search_criteria', {}).get('max_price', 35000)
-    stats = {
-        'total_ever': session.query(Car).count(),
-        'total_available': session.query(Car).filter(Car.is_available == True).count(),
-        'within_budget': session.query(Car).filter(
-            Car.is_available == True,
-            Car.price <= max_price
-        ).count(),
-        'perfect_matches': session.query(Car).filter(
-            Car.is_available == True,
-            Car.has_all_required_features == True
-        ).count(),
-        'avg_price': session.query(func.avg(Car.price)).filter(Car.is_available == True).scalar() or 0
-    }
     session.close()
     
     return render_template('my_matches.html',
@@ -1444,21 +1444,81 @@ def my_matches():
                          config=config,
                          total_critical=total_critical,
                          available_makes=available_makes,
-                         available_models=available_models,
-                         stats=stats)
+                         available_models=available_models)
 
+
+
+def get_heerenveen_matches(session, fuel_type, config, limit=3):
+    """
+    Get top matches for Heerenveen with lenient filtering.
+    Only enforces: year >=2020, price <=€35,000, mileage <=150,000km, distance <=30km
+    Ignores: make/model preferences, storage capacity, doors/seats, family car requirements
+    """
+    # Build base query
+    query = session.query(Car).filter(
+        Car.is_available == True,
+        Car.fuel_type == fuel_type if fuel_type != 'PHEV/Hybrid' else Car.fuel_type.in_(['PHEV', 'Hybrid']),
+        Car.year >= 2020,
+        Car.price <= 35000,
+        Car.mileage_km <= 150000,
+        Car.distance_from_heerenveen_km <= 30
+    )
+    
+    all_cars = query.all()
+    
+    # Filter out only excluded vehicles (no family car requirements)
+    filtered_cars = [
+        car for car in all_cars 
+        if not should_exclude_vehicle(str(car.make or ''), str(car.model or ''))
+    ]
+    
+    # Score and sort cars
+    scored_cars = []
+    for car in filtered_cars:
+        # Load boot space if missing
+        if not car.storage_capacity_liters:
+            boot_data = get_boot_space(str(car.make), str(car.model))
+            if boot_data:
+                car.storage_capacity_liters = boot_data.get('normal', 0)
+        
+        # Add EV-Database range data for Full Electric
+        if fuel_type == 'Full Electric':
+            fuel_type_str = str(car.fuel_type) if car.fuel_type is not None else None
+            car.ev_db_range = get_ev_database_range(str(car.make), str(car.model), fuel_type_str)
+            car.wltp_range = get_wltp_range(str(car.make), str(car.model), fuel_type_str)
+            car.battery_size = extract_battery_size(str(car.model))
+            car.towing_range = calculate_towing_range(car, car.ev_db_range)
+        
+        # Use 20% distance weight to prioritize local cars
+        raw_score = calculate_car_score(car, config, distance_weight=0.20)
+        value_rating = convert_score_to_value_rating(raw_score)
+        critical_features = check_critical_features(car, config)
+        
+        scored_cars.append({
+            'car': car,
+            'score': raw_score,
+            'value_rating': value_rating,
+            'critical_features': critical_features,
+            'missing_critical': sum(1 for has_it in critical_features.values() if not has_it)
+        })
+    
+    # Sort by score (lower is better)
+    scored_cars.sort(key=lambda x: x['score'])
+    
+    # Get top matches
+    top_cars = [item['car'] for item in scored_cars[:limit]]
+    
+    # Add score and value_rating to car objects for display
+    for item in scored_cars[:limit]:
+        item['car'].score = item['score']
+        item['car'].value_rating = item['value_rating']
+    
+    return top_cars
 
 @app.route('/top-matches')
 @login_required
 def top_matches():
     """Show top 3 Full Electric and top 3 PHEV/Hybrid cars based on smart scoring (price, odometer, range, age)"""
-    print("=" * 80, flush=True)
-    print("TOP-MATCHES ROUTE CALLED", flush=True)
-    print(f"Request URL: {request.url}", flush=True)
-    print(f"Request args: {request.args}", flush=True)
-    print(f"Request headers: {dict(request.headers)}", flush=True)
-    print("=" * 80, flush=True)
-    
     session = db.get_session()
     
     # Get filter parameters from request
@@ -1469,15 +1529,11 @@ def top_matches():
     min_year = request.args.get('min_year', type=int)
     max_year = request.args.get('max_year', type=int)
     min_price = request.args.get('min_price', type=float)
-    max_price = request.args.get('max_price', type=float)
+    max_price = request.args.get('max_price', type=float) or config.get('search_criteria', {}).get('max_price')
     min_mileage = request.args.get('min_mileage', type=int)
     max_mileage = request.args.get('max_mileage', type=int)
     max_distance = request.args.get('max_distance', type=float)
     min_storage = request.args.get('min_storage', type=int)
-    
-    print(f"Filter params - make:{make}, model:{model}, type:{vehicle_type}, fuel:{fuel_type}", flush=True)
-    print(f"Filter params - years:{min_year}-{max_year}, price:{min_price}-{max_price}", flush=True)
-    print(f"Filter params - mileage:{min_mileage}-{max_mileage}, distance:{max_distance}, storage:{min_storage}", flush=True)
     
     # Build base query for Full Electric cars
     full_electric_query = session.query(Car).filter(
@@ -1510,8 +1566,6 @@ def top_matches():
         full_electric_query = full_electric_query.filter(Car.storage_capacity_liters >= min_storage)
     
     full_electric_all = full_electric_query.all()
-    print(f"=== FULL ELECTRIC FILTERING DEBUG ===", flush=True)
-    print(f"Initial query found: {len(full_electric_all)} Full Electric cars", flush=True)
     
     # Filter out excluded vehicles and apply family car size filters
     full_electric_filtered = [
@@ -1521,7 +1575,6 @@ def top_matches():
         and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
         and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 500)  # Min 500L boot when known
     ]
-    print(f"After family car filters (4+ doors, 5+ seats, 500L+ boot): {len(full_electric_filtered)} cars", flush=True)
     
     # Define preferred makes and models (same as my-matches page)
     preferred_makes = ['Skoda', 'Audi', 'Kia']
@@ -1551,7 +1604,7 @@ def top_matches():
         car.is_preferred = is_preferred_brand or is_preferred_model
         
         # Use higher distance weight for top-matches page to prioritize local cars (20% vs 10% default)
-        raw_score, score_breakdown = calculate_car_score(car, config, distance_weight=0.20, return_breakdown=True)
+        raw_score = calculate_car_score(car, config, distance_weight=0.20)
         value_rating = convert_score_to_value_rating(raw_score)
         critical_features = check_critical_features(car, config)
         full_electric_scored.append({
@@ -1559,8 +1612,7 @@ def top_matches():
             'score': raw_score,
             'value_rating': value_rating,
             'critical_features': critical_features,
-            'missing_critical': sum(1 for has_it in critical_features.values() if not has_it),
-            'breakdown': score_breakdown
+            'missing_critical': sum(1 for has_it in critical_features.values() if not has_it)
         })
     
     # Sort by score (lower is better)
@@ -1576,7 +1628,6 @@ def top_matches():
     for item in full_electric_scored[:3]:
         item['car'].score = item['score']
         item['car'].value_rating = item['value_rating']
-        item['car'].breakdown = item['breakdown']
     
     # Build base query for PHEV/Hybrid cars
     phev_query = session.query(Car).filter(
@@ -1609,8 +1660,6 @@ def top_matches():
         phev_query = phev_query.filter(Car.storage_capacity_liters >= min_storage)
     
     phev_all = phev_query.all()
-    logger.info(f"=== PHEV/HYBRID FILTERING DEBUG ===")
-    logger.info(f"Initial query found: {len(phev_all)} PHEV/Hybrid cars")
     
     # Filter out excluded vehicles and apply family car size filters
     phev_filtered = [
@@ -1620,7 +1669,6 @@ def top_matches():
         and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
         and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 500)  # Min 500L boot when known
     ]
-    logger.info(f"After family car filters (4+ doors, 5+ seats, 500L+ boot): {len(phev_filtered)} cars")
     
     # Score and sort PHEV cars
     phev_scored = []
@@ -1637,7 +1685,7 @@ def top_matches():
         car.is_preferred = is_preferred_brand or is_preferred_model
         # Use higher distance weight for top-matches page to prioritize local cars (20% vs 10% default)
         
-        raw_score, score_breakdown = calculate_car_score(car, config, distance_weight=0.20, return_breakdown=True)
+        raw_score = calculate_car_score(car, config, distance_weight=0.20)
         value_rating = convert_score_to_value_rating(raw_score)
         critical_features = check_critical_features(car, config)
         phev_scored.append({
@@ -1645,8 +1693,7 @@ def top_matches():
             'score': raw_score,
             'value_rating': value_rating,
             'critical_features': critical_features,
-            'missing_critical': sum(1 for has_it in critical_features.values() if not has_it),
-            'breakdown': score_breakdown
+            'missing_critical': sum(1 for has_it in critical_features.values() if not has_it)
         })
     
     # Sort by score (lower is better)
@@ -1656,19 +1703,25 @@ def top_matches():
     for item in phev_scored[:3]:
         item['car'].score = item['score']
         item['car'].value_rating = item['value_rating']
-        item['car'].breakdown = item['breakdown']
     
     # Organize by fuel type for template
+
+    # Get Heerenveen matches (lenient filtering)
+    heerenveen_full_electric = get_heerenveen_matches(session, 'Full Electric', config, limit=3)
+    heerenveen_phev = get_heerenveen_matches(session, 'PHEV/Hybrid', config, limit=3)
+    
+    # Organize Heerenveen matches by fuel type
+    heerenveen_by_fuel = {}
+    if heerenveen_full_electric:
+        heerenveen_by_fuel['Full Electric'] = heerenveen_full_electric
+    if heerenveen_phev:
+        heerenveen_by_fuel['PHEV/Hybrid'] = heerenveen_phev
+    
     cars_by_fuel = {}
     if full_electric:
         cars_by_fuel['Full Electric'] = full_electric
     if phev:
         cars_by_fuel['PHEV/Hybrid'] = phev
-    
-    print(f"=== FINAL RESULTS ===", flush=True)
-    print(f"cars_by_fuel keys: {list(cars_by_fuel.keys())}", flush=True)
-    print(f"Full Electric cars: {len(cars_by_fuel.get('Full Electric', []))}", flush=True)
-    print(f"PHEV/Hybrid cars: {len(cars_by_fuel.get('PHEV/Hybrid', []))}", flush=True)
     
     # Get critical features info for all top matches
     critical_features_info = {}
@@ -1695,31 +1748,34 @@ def top_matches():
         'max_mileage_acceptable': config.get('search_criteria', {}).get('max_mileage_km', 100000)
     }
     
+    # DEBUG: Log what we are passing to template (BEFORE session.close())
+    logger.info("=== TEMPLATE DATA DEBUG ===")
+    logger.info(f"cars_by_fuel keys: {list(cars_by_fuel.keys())}")
+    logger.info(f"Total cars in cars_by_fuel: {sum(len(cars) for cars in cars_by_fuel.values())}")
+    for fuel_type, cars in cars_by_fuel.items():
+        logger.info(f"  {fuel_type}: {len(cars)} cars")
+        if len(cars) > 0:
+            for i, car in enumerate(cars[:3]):  # Log first 3 cars per fuel type
+                logger.info(f"    [{i+1}] {car.make} {car.model} (ID: {car.id})")
+    logger.info(f"heerenveen_by_fuel keys: {list(heerenveen_by_fuel.keys())}")
+    logger.info(f"Total cars in heerenveen_by_fuel: {sum(len(cars) for cars in heerenveen_by_fuel.values())}")
+    for fuel_type, cars in heerenveen_by_fuel.items():
+        logger.info(f"  {fuel_type}: {len(cars)} cars")
+        if len(cars) > 0:
+            for i, car in enumerate(cars[:3]):  # Log first 3 cars per fuel type
+                logger.info(f"    [{i+1}] {car.make} {car.model} (ID: {car.id})")
+    logger.info("=" * 80)
     
-    # Calculate statistics for sidebar
-    max_price = config.get('search_criteria', {}).get('max_price', 35000)
-    stats = {
-        'total_ever': session.query(Car).count(),
-        'total_available': session.query(Car).filter(Car.is_available == True).count(),
-        'within_budget': session.query(Car).filter(
-            Car.is_available == True,
-            Car.price <= max_price
-        ).count(),
-        'perfect_matches': session.query(Car).filter(
-            Car.is_available == True,
-            Car.has_all_required_features == True
-        ).count(),
-        'avg_price': session.query(func.avg(Car.price)).filter(Car.is_available == True).scalar() or 0
-    }
     session.close()
+    
     
     return render_template('top_matches.html', 
                           cars_by_fuel=cars_by_fuel,
+                          heerenveen_by_fuel=heerenveen_by_fuel,
                           critical_features_info=critical_features_info,
                           trade_in_value=TRADE_IN_VALUE,
                           config=config,
                           available_makes=available_makes,
-                          stats=stats,
                           available_models=available_models,
                           user_reqs=user_reqs)
 
@@ -1754,34 +1810,32 @@ def analytics():
             Car.price < max_p
         ).count()
         
-        # Cars matching specifications in this range (has all required features)
-        matching_specs_count = session.query(Car).filter(
+        # Preferred cars in this range - ONLY count specific preferred models
+        model_conditions = [Car.model.ilike(f'%{model}%') for model in preferred_models]
+        preferred_count = session.query(Car).filter(
             Car.is_available == True,
             Car.price >= min_p,
             Car.price < max_p,
-            Car.has_all_required_features == True
+            or_(*model_conditions)  # Only match the specific models
         ).count()
         
         price_distribution.append({
             'range': f"€{min_p//1000}k-{max_p//1000}k",
             'count': count
         })
-        preferred_counts.append(matching_specs_count)
+        preferred_counts.append(preferred_count)
     
-    # Find the range with most cars matching specifications
-    # Only highlight if there's a clear winner (no ties)
+    # Find the range(s) with most preferred cars
+    # Highlight all ranges that have the maximum count (including ties)
     max_preferred_count = max(preferred_counts) if preferred_counts else 0
-    count_of_max = preferred_counts.count(max_preferred_count) if max_preferred_count > 0 else 0
     
-    # Only set preferred_range_indices if there's a unique maximum (not a tie)
-    if max_preferred_count > 0 and count_of_max == 1:
-        preferred_range_index = preferred_counts.index(max_preferred_count)
-        preferred_range_indices = [preferred_range_index]  # Pass as list for template
+    # Get all indices that have the maximum count
+    if max_preferred_count > 0:
+        preferred_range_indices = [i for i, count in enumerate(preferred_counts) if count == max_preferred_count]
     else:
-        preferred_range_index = -1  # Don't highlight any range if there's a tie
-        preferred_range_indices = []  # Empty list means no highlighting
+        preferred_range_indices = []  # No preferred cars at all
     
-    logger.info(f"Cars matching specs by range: {preferred_counts}, max={max_preferred_count}, ties={count_of_max}, index={preferred_range_index}")
+    logger.info(f"Preferred counts by range: {preferred_counts}, max={max_preferred_count}, highlighted_indices={preferred_range_indices}")
     
     
     # Cars by source
@@ -2049,6 +2103,7 @@ def unavailable_cars():
 
 @app.route('/admin')
 @login_required
+@admin_required
 def admin():
     """Admin panel for scraper management"""
     session = db.get_session()
@@ -2180,6 +2235,7 @@ def trigger_scrape():
 
 @app.route('/api/trigger-availability-check', methods=['POST'])
 @login_required
+@admin_required
 def trigger_availability_check():
     """Manually trigger availability check"""
     try:
@@ -2215,11 +2271,12 @@ def trigger_availability_check():
 
 @app.route('/api/scraper-logs', methods=['GET'])
 @login_required
+@admin_required
 def get_scraper_logs():
     """Get recent scraper log entries"""
     try:
         import os
-        log_file = '/tmp/flask_app.log'
+        log_file = '/app/logs/scraper.log'
         
         # Check if log file exists
         if not os.path.exists(log_file):
@@ -2480,6 +2537,7 @@ def delete_exclusion(exclusion_id):
 
 @app.route('/api/availability-history')
 @login_required
+@admin_required
 def api_availability_history():
     """API endpoint for availability check history"""
     try:
@@ -2527,6 +2585,7 @@ def api_availability_history():
 
 @app.route('/api/scraper-statistics')
 @login_required
+@admin_required
 def api_scraper_statistics():
     """API endpoint for scraper statistics per website"""
     try:
@@ -2597,6 +2656,7 @@ def api_scraper_statistics():
 
 @app.route('/api/scraper-trends')
 @login_required
+@admin_required
 def get_scraper_trends():
     """Get scraper performance trends over the last 30 days"""
     try:
@@ -2688,6 +2748,7 @@ def get_scraper_trends():
 
 @app.route('/api/scheduler-status')
 @login_required
+@admin_required
 def get_scheduler_status():
     """Get current scheduler configuration and status"""
     try:
@@ -2758,6 +2819,7 @@ def get_scheduler_status():
 
 @app.route('/api/scheduler-update', methods=['POST'])
 @login_required
+@admin_required
 def update_scheduler_config():
     """Update scheduler configuration in config.yaml"""
     try:
@@ -2828,6 +2890,103 @@ def update_scheduler_config():
             'message': str(e)
         }), 500
 
+
+@app.route("/config", methods=["GET"])
+@login_required
+def get_config():
+    """Get current configuration including availability checker settings"""
+    try:
+        # Get availability checker config from memory
+        availability_config = config.get("availability_checker", {})
+        
+        # Convert hours to minutes for the frontend
+        check_interval_hours = availability_config.get("check_interval_hours", 0.25)  # Default 15 minutes
+        check_interval_minutes = int(check_interval_hours * 60)
+        min_features_required = availability_config.get("min_features_required", 3)
+        
+        return jsonify({
+            "status": "success",
+            "availability_checker": {
+                "check_interval_hours": check_interval_hours,
+                "min_features_required": min_features_required
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error getting config: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+@app.route("/api/availability-config", methods=["POST"])
+@login_required
+@admin_required
+def update_availability_config():
+    """Update availability checker configuration in config.yaml"""
+    try:
+        data = request.json
+        
+        # Validate input
+        if "check_interval_minutes" not in data or "min_features_required" not in data:
+            return jsonify({
+                "status": "error",
+                "message": "Missing required fields: check_interval_minutes, min_features_required"
+            }), 400
+        
+        check_interval = int(data["check_interval_minutes"])
+        min_features = int(data["min_features_required"])
+        
+        # Validate values
+        if check_interval < 1 or check_interval > 1440:
+            return jsonify({
+                "status": "error",
+                "message": "Check interval must be between 1 and 1440 minutes"
+            }), 400
+            
+        if min_features < 0 or min_features > 10:
+            return jsonify({
+                "status": "error",
+                "message": "Minimum features must be between 0 and 10"
+            }), 400
+        
+        # Load current config
+        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml")
+        with open(config_path, "r") as f:
+            current_config = yaml.safe_load(f)
+        
+        # Update availability checker settings
+        if "availability_checker" not in current_config:
+            current_config["availability_checker"] = {}
+        
+        # Convert minutes to hours for storage (config uses hours)
+        check_interval_hours = check_interval / 60.0
+        
+        current_config["availability_checker"]["check_interval_hours"] = check_interval_hours
+        current_config["availability_checker"]["min_features_required"] = min_features
+        
+        # Write updated config back to file
+        with open(config_path, "w") as f:
+            yaml.dump(current_config, f, default_flow_style=False, sort_keys=False)
+        
+        # Reload config in memory
+        global config
+        config = current_config
+        
+        return jsonify({
+            "status": "success",
+            "message": "Availability configuration updated successfully",
+            "config": {
+                "check_interval_hours": check_interval_hours,
+                "min_features_required": min_features
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error updating availability config: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 @app.route('/api/critical-features', methods=['GET'])
 @login_required
@@ -3226,8 +3385,8 @@ def calculate_depreciation():
             'mileage_km': current_car.mileage_km,
             'average_km_per_year': current_car.average_km_per_year,
             'year': current_car.year,  # Add manufacture year for accurate age calculation
-            'purchase_mileage_km': current_car.purchase_mileage_km,
-            'estimated_new_price': current_car.estimated_new_price
+            'purchase_mileage_km': current_car.purchase_mileage_km,  # Add purchase mileage for accurate km/year
+            'estimated_new_price': current_car.estimated_new_price  # Add estimated new price for trade-in calculation
         }
         
         # Calculate depreciation
@@ -3247,7 +3406,7 @@ def calculate_depreciation():
                 'year': current_car.year,
                 'license_plate': current_car.license_plate,
                 'purchase_price': current_car.initial_purchase_price,
-                'estimated_new_price': current_car.estimated_new_price or current_car.initial_purchase_price,
+                'estimated_new_price': current_car.estimated_new_price,
                 'purchase_date': current_car.purchase_date.isoformat() if current_car.purchase_date else None,
                 'current_mileage': current_car.mileage_km
             },
@@ -3261,6 +3420,7 @@ def calculate_depreciation():
 
 @app.route('/api/scraper-service/status', methods=['GET'])
 @login_required
+@admin_required
 def get_scraper_service_status():
     """Get the status of the scraper Docker container"""
     try:
@@ -3329,6 +3489,7 @@ def get_scraper_service_status():
 
 @app.route('/api/scraper-service/control', methods=['POST'])
 @login_required
+@admin_required
 def control_scraper_service():
     """Start or stop the scraper Docker container"""
     try:
@@ -3452,6 +3613,217 @@ def control_scraper_service():
         }), 500
 
 
+# ============================================================================
+# USER MANAGEMENT ROUTES
+# ============================================================================
+
+@app.route('/api/users', methods=['GET'])
+@login_required
+def get_users():
+    """Get all users (admin only)"""
+    # Check if current user is admin
+    current_username = current_user.username
+    session = db.get_session()
+    try:
+        requesting_user = session.query(User).filter_by(username=current_username).first()
+        if not requesting_user or not requesting_user.is_admin:
+            return jsonify({'status': 'error', 'message': 'Admin access required'}), 403
+        
+        users = session.query(User).order_by(User.created_at.desc()).all()
+        users_data = [{
+            'id': u.id,
+            'username': u.username,
+            'is_admin': u.is_admin,
+            'is_active': u.is_active,
+            'created_at': u.created_at.isoformat() if u.created_at else None,
+            'last_login': u.last_login.isoformat() if u.last_login else None
+        } for u in users]
+        
+        return jsonify({'status': 'success', 'users': users_data})
+    except Exception as e:
+        logger.error(f"Error fetching users: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        session.close()
+
+
+@app.route('/api/users/<int:user_id>', methods=['GET'])
+@login_required
+def get_user(user_id):
+    """Get a single user by ID (admin only)"""
+    # Check if current user is admin
+    current_username = current_user.username
+    session = db.get_session()
+    try:
+        requesting_user = session.query(User).filter_by(username=current_username).first()
+        if not requesting_user or not requesting_user.is_admin:
+            return jsonify({'status': 'error', 'message': 'Admin access required'}), 403
+        
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            return jsonify({'status': 'error', 'message': 'User not found'}), 404
+        
+        user_data = {
+            'id': user.id,
+            'username': user.username,
+            'is_admin': user.is_admin,
+            'is_active': user.is_active,
+            'created_at': user.created_at.isoformat() if user.created_at else None,
+            'last_login': user.last_login.isoformat() if user.last_login else None
+        }
+        
+        return jsonify({'status': 'success', 'user': user_data})
+    except Exception as e:
+        logger.error(f"Error fetching user: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        session.close()
+
+
+@app.route('/api/users', methods=['POST'])
+@login_required
+def create_user():
+    """Create a new user (admin only)"""
+    # Check if current user is admin
+    current_username = current_user.username
+    session = db.get_session()
+    try:
+        requesting_user = session.query(User).filter_by(username=current_username).first()
+        if not requesting_user or not requesting_user.is_admin:
+            return jsonify({'status': 'error', 'message': 'Admin access required'}), 403
+        
+        data = request.get_json()
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        is_admin = data.get('is_admin', False)
+        
+        # Validate input
+        if not username or len(username) < 3:
+            return jsonify({'status': 'error', 'message': 'Username must be at least 3 characters'}), 400
+        if not password or len(password) < 6:
+            return jsonify({'status': 'error', 'message': 'Password must be at least 6 characters'}), 400
+        
+        # Check if username already exists
+        existing_user = session.query(User).filter_by(username=username).first()
+        if existing_user:
+            return jsonify({'status': 'error', 'message': 'Username already exists'}), 400
+        
+        # Create new user
+        new_user = User(
+            username=username,
+            password_hash=generate_password_hash(password),
+            is_admin=is_admin,
+            is_active=True,
+            created_at=datetime.utcnow()
+        )
+        session.add(new_user)
+        session.commit()
+        
+        logger.info(f"User created: {username} (admin={is_admin}) by {current_username}")
+        return jsonify({
+            'status': 'success',
+            'message': f'User {username} created successfully',
+            'user': {
+                'id': new_user.id,
+                'username': new_user.username,
+                'is_admin': new_user.is_admin,
+                'is_active': new_user.is_active
+            }
+        })
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error creating user: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        session.close()
+
+
+@app.route('/api/users/<int:user_id>', methods=['PUT'])
+@login_required
+def update_user(user_id):
+    """Update a user (admin only)"""
+    current_username = current_user.username
+    session = db.get_session()
+    try:
+        requesting_user = session.query(User).filter_by(username=current_username).first()
+        if not requesting_user or not requesting_user.is_admin:
+            return jsonify({'status': 'error', 'message': 'Admin access required'}), 403
+        
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            return jsonify({'status': 'error', 'message': 'User not found'}), 404
+        
+        data = request.get_json()
+        
+        # Update password if provided
+        if 'password' in data and data['password'].strip():
+            password = data['password'].strip()
+            if len(password) < 6:
+                return jsonify({'status': 'error', 'message': 'Password must be at least 6 characters'}), 400
+            user.password_hash = generate_password_hash(password)
+        
+        # Update admin status
+        if 'is_admin' in data:
+            user.is_admin = data['is_admin']
+        
+        # Update active status
+        if 'is_active' in data:
+            user.is_active = data['is_active']
+        
+        session.commit()
+        logger.info(f"User updated: {user.username} by {current_username}")
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'User {user.username} updated successfully',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'is_admin': user.is_admin,
+                'is_active': user.is_active
+            }
+        })
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error updating user: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        session.close()
+
+
+@app.route('/api/users/<int:user_id>', methods=['DELETE'])
+@login_required
+def delete_user(user_id):
+    """Delete a user (admin only)"""
+    current_username = current_user.username
+    session = db.get_session()
+    try:
+        requesting_user = session.query(User).filter_by(username=current_username).first()
+        if not requesting_user or not requesting_user.is_admin:
+            return jsonify({'status': 'error', 'message': 'Admin access required'}), 403
+        
+        # Prevent deleting yourself
+        if current_user.id == user_id:
+            return jsonify({'status': 'error', 'message': 'Cannot delete your own account'}), 400
+        
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            return jsonify({'status': 'error', 'message': 'User not found'}), 404
+        
+        username = user.username
+        session.delete(user)
+        session.commit()
+        
+        logger.info(f"User deleted: {username} by {current_username}")
+        return jsonify({'status': 'success', 'message': f'User {username} deleted successfully'})
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error deleting user: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        session.close()
+
+
 @app.template_filter('format_price')
 def format_price(price):
     """Template filter for formatting prices"""
@@ -3483,6 +3855,14 @@ def format_datetime(dt):
         return "N/A"
     return dt.strftime("%Y-%m-%d %H:%M")
 
+
+
+# DEBUG: List all registered routes
+print("\n" + "="*80)
+logger.info("DEBUG: All registered routes:")
+for rule in app.url_map.iter_rules():
+    print(f"  {rule.rule} -> {rule.endpoint} [{','.join(rule.methods)}]")
+print("="*80 + "\n")
 
 if __name__ == '__main__':
     # Run Flask development server with threading enabled

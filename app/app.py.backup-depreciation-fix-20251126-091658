@@ -7,9 +7,7 @@ import os
 # Add parent directory to path to import models
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
-from flask_login import login_required, logout_user, login_user
-from app.auth import init_auth, check_credentials, User
+from flask import Flask, render_template, request, jsonify
 from models.database import Database, Car, PriceHistory, ScraperLog
 from sqlalchemy import desc, func, or_, case
 from datetime import datetime, timedelta
@@ -115,9 +113,7 @@ def initialize_current_car_from_config():
                 mileage_km=current_car_config.get('mileage_km'),
                 initial_purchase_price=current_car_config.get('initial_purchase_price'),
                 purchase_date=purchase_date,
-                average_km_per_year=current_car_config.get('average_km_per_year'),
-                purchase_mileage_km=current_car_config.get('purchase_mileage_km'),
-                estimated_new_price=current_car_config.get('estimated_new_price')
+                average_km_per_year=current_car_config.get('average_km_per_year')
             )
             session.add(current_car)
             session.commit()
@@ -165,16 +161,6 @@ def initialize_current_car_from_config():
                 existing_car.average_km_per_year = current_car_config.get('average_km_per_year')
                 updated = True
             
-            
-            # Update purchase_mileage_km if provided
-            if current_car_config.get("purchase_mileage_km") and existing_car.purchase_mileage_km != current_car_config.get("purchase_mileage_km"):
-                existing_car.purchase_mileage_km = current_car_config.get("purchase_mileage_km")
-                updated = True
-            
-            # Update estimated_new_price if provided
-            if current_car_config.get("estimated_new_price") and existing_car.estimated_new_price != current_car_config.get("estimated_new_price"):
-                existing_car.estimated_new_price = current_car_config.get("estimated_new_price")
-                updated = True
             if updated:
                 session.commit()
                 logger.info(f"Updated current car from config: {license_plate}")
@@ -944,32 +930,7 @@ def check_critical_features(car, config):
     return results
 
 
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
-        
-        if check_credentials(username, password):
-            user = User(username)
-            login_user(user)
-            next_page = request.args.get("next")
-            return redirect(next_page or url_for("index"))
-        else:
-            flash("Invalid username or password")
-    
-    return render_template("login.html")
-
-@app.route("/logout")
-@login_required
-def logout():
-    logout_user()
-    return redirect(url_for("login"))
-
-@login_required
 @app.route('/')
-@login_required
 def index():
     """Home page with car listings"""
     session = db.get_session()
@@ -1141,7 +1102,6 @@ def index():
 
 
 @app.route('/car/<int:car_id>')
-@login_required
 def car_detail(car_id):
     """Detailed view of a single car"""
     session = db.get_session()
@@ -1195,7 +1155,6 @@ def car_detail(car_id):
 
 
 @app.route('/my-matches')
-@login_required
 def my_matches():
     """Show cars matching user's specific requirements with clear indicators"""
     session = db.get_session()
@@ -1449,7 +1408,6 @@ def my_matches():
 
 
 @app.route('/top-matches')
-@login_required
 def top_matches():
     """Show top 3 Full Electric and top 3 PHEV/Hybrid cars based on smart scoring (price, odometer, range, age)"""
     print("=" * 80, flush=True)
@@ -1725,7 +1683,6 @@ def top_matches():
 
 
 @app.route('/analytics')
-@login_required
 def analytics():
     """Analytics and charts page"""
     session = db.get_session()
@@ -1933,7 +1890,6 @@ def analytics():
 
 
 @app.route('/api/cars')
-@login_required
 def api_cars():
     """API endpoint for car listings (JSON)"""
     session = db.get_session()
@@ -1968,7 +1924,6 @@ def api_cars():
 
 
 @app.route('/api/stats')
-@login_required
 def api_stats():
     """API endpoint for statistics (JSON)"""
     session = db.get_session()
@@ -2008,7 +1963,6 @@ def api_stats():
 
 
 @app.route('/unavailable-cars')
-@login_required
 def unavailable_cars():
     """Show all unavailable cars with filter for preferred ones"""
     session = db.get_session()
@@ -2048,7 +2002,6 @@ def unavailable_cars():
 
 
 @app.route('/admin')
-@login_required
 def admin():
     """Admin panel for scraper management"""
     session = db.get_session()
@@ -2117,7 +2070,6 @@ def admin():
 
 
 @app.route('/api/trigger-scrape', methods=['POST'])
-@login_required
 def trigger_scrape():
     """Manually trigger a scraper run"""
     try:
@@ -2179,7 +2131,6 @@ def trigger_scrape():
 
 
 @app.route('/api/trigger-availability-check', methods=['POST'])
-@login_required
 def trigger_availability_check():
     """Manually trigger availability check"""
     try:
@@ -2214,7 +2165,6 @@ def trigger_availability_check():
 
 
 @app.route('/api/scraper-logs', methods=['GET'])
-@login_required
 def get_scraper_logs():
     """Get recent scraper log entries"""
     try:
@@ -2281,7 +2231,6 @@ def get_scraper_logs():
 
 
 @app.route('/api/mark-available/<int:car_id>', methods=['POST'])
-@login_required
 def mark_car_available(car_id):
     """
     Manually mark a car as available again
@@ -2340,7 +2289,6 @@ def mark_car_available(car_id):
 
 
 @app.route('/api/exclusions', methods=['GET'])
-@login_required
 def get_exclusions():
     """Get all excluded models from config"""
     try:
@@ -2367,7 +2315,6 @@ def get_exclusions():
 
 
 @app.route('/api/exclusions', methods=['POST'])
-@login_required
 def add_exclusion():
     """Add a new exclusion to config"""
     try:
@@ -2427,7 +2374,6 @@ def add_exclusion():
 
 
 @app.route('/api/exclusions/<path:exclusion_id>', methods=['DELETE'])
-@login_required
 def delete_exclusion(exclusion_id):
     """Delete an exclusion from config"""
     try:
@@ -2479,7 +2425,6 @@ def delete_exclusion(exclusion_id):
 
 
 @app.route('/api/availability-history')
-@login_required
 def api_availability_history():
     """API endpoint for availability check history"""
     try:
@@ -2526,7 +2471,6 @@ def api_availability_history():
 
 
 @app.route('/api/scraper-statistics')
-@login_required
 def api_scraper_statistics():
     """API endpoint for scraper statistics per website"""
     try:
@@ -2596,7 +2540,6 @@ def api_scraper_statistics():
 
 
 @app.route('/api/scraper-trends')
-@login_required
 def get_scraper_trends():
     """Get scraper performance trends over the last 30 days"""
     try:
@@ -2687,7 +2630,6 @@ def get_scraper_trends():
 
 
 @app.route('/api/scheduler-status')
-@login_required
 def get_scheduler_status():
     """Get current scheduler configuration and status"""
     try:
@@ -2757,7 +2699,6 @@ def get_scheduler_status():
 
 
 @app.route('/api/scheduler-update', methods=['POST'])
-@login_required
 def update_scheduler_config():
     """Update scheduler configuration in config.yaml"""
     try:
@@ -2830,7 +2771,6 @@ def update_scheduler_config():
 
 
 @app.route('/api/critical-features', methods=['GET'])
-@login_required
 def get_critical_features():
     """Get list of all possible critical features with their enabled status, organized by category"""
     try:
@@ -2914,7 +2854,6 @@ def get_critical_features():
 
 
 @app.route('/api/critical-features/<path:feature_id>', methods=['PUT'])
-@login_required
 def update_critical_feature(feature_id):
     """Enable or disable a critical feature"""
     try:
@@ -3017,7 +2956,6 @@ def update_critical_feature(feature_id):
 
 
 @app.route('/trade-in-value')
-@login_required
 def trade_in_value_page():
     """Page to view and update trade-in value"""
     from models.database import CurrentCar, TradeInValue
@@ -3048,7 +2986,6 @@ def trade_in_value_page():
 
 
 @app.route('/api/trade-in-value', methods=['POST'])
-@login_required
 def update_trade_in_value():
     """API endpoint to manually update trade-in value"""
     try:
@@ -3120,7 +3057,6 @@ def update_trade_in_value():
 
 
 @app.route('/api/update-mileage', methods=['POST'])
-@login_required
 def update_mileage():
     """API endpoint to update only the current car's mileage"""
     try:
@@ -3177,7 +3113,6 @@ def update_mileage():
 
 
 @app.route('/api/calculate-depreciation', methods=['GET'])
-@login_required
 def calculate_depreciation():
     """API endpoint to calculate depreciation for current car"""
     try:
@@ -3225,9 +3160,7 @@ def calculate_depreciation():
             'purchase_date': current_car.purchase_date,
             'mileage_km': current_car.mileage_km,
             'average_km_per_year': current_car.average_km_per_year,
-            'year': current_car.year,  # Add manufacture year for accurate age calculation
-            'purchase_mileage_km': current_car.purchase_mileage_km,
-            'estimated_new_price': current_car.estimated_new_price
+            'year': current_car.year  # Add manufacture year for accurate age calculation
         }
         
         # Calculate depreciation
@@ -3260,7 +3193,6 @@ def calculate_depreciation():
 
 
 @app.route('/api/scraper-service/status', methods=['GET'])
-@login_required
 def get_scraper_service_status():
     """Get the status of the scraper Docker container"""
     try:
@@ -3328,7 +3260,6 @@ def get_scraper_service_status():
 
 
 @app.route('/api/scraper-service/control', methods=['POST'])
-@login_required
 def control_scraper_service():
     """Start or stop the scraper Docker container"""
     try:

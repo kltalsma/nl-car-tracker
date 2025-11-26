@@ -14,13 +14,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code and config
 COPY . .
 
 # Create necessary directories
 RUN mkdir -p data logs logs/screenshots
 
-# Expose port
+# Expose port (Railway will set PORT env var)
 EXPOSE 5000
 
 # Run the web application

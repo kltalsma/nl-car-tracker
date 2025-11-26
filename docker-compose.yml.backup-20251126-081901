@@ -9,8 +9,6 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./config.yaml:/app/config.yaml
-      - ./app:/app/app
-      - ./check_availability.py:/app/check_availability.py
       - /var/run/docker.sock:/var/run/docker.sock  # Allow Docker control from container
       - .:/app/project_root  # Mount project root for docker-compose access
     environment:
@@ -31,8 +29,6 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./config.yaml:/app/config.yaml
-      - ./app:/app/app
-      - ./check_availability.py:/app/check_availability.py
     environment:
       - PYTHONUNBUFFERED=1
     command: python run_scraper.py

@@ -1,0 +1,1880 @@
+"""
+Utility functions for NL Car Tracker
+"""
+from geopy.geocoders import Nominatim
+from geopy.distance import geodesic
+from geopy.exc import GeocoderTimedOut
+from typing import Optional, Tuple
+import logging
+import time
+import yaml
+import os
+import requests
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
+
+logger = logging.getLogger(__name__)
+
+# Initialize geocoder with reduced timeout
+# Note: Not using custom adapter_factory to avoid compatibility issues with geopy
+geolocator = Nominatim(
+    user_agent="nl_car_tracker"
+)
+
+# Cache for geocoding results
+_geocoding_cache = {}
+
+# Heerenveen coordinates (center point for distance calculations)
+HEERENVEEN_COORDS = (52.9594, 5.9201)
+
+# Load vehicle classification data
+def _load_config():
+    """Load configuration file"""
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
+try:
+    _config = _load_config()
+    _vehicle_classification = _config.get('vehicle_classification', {})
+except Exception as e:
+    logger.warning(f"Could not load vehicle classification config: {e}")
+    _vehicle_classification = {}
+
+
+def extract_city_from_address(address: str) -> Optional[str]:
+    """
+    Extract just the city name from a full address string
+    
+    Args:
+        address: Full address string (e.g., "Kelvinstraat 4, 6003 DH, WEERT" or "1234AB Amsterdam")
+        
+    Returns:
+        City name or None if cannot be extracted
+    """
+    if not address:
+        return None
+    
+    import re
+    
+    # Common Dutch address formats:
+    # 1. "Street 123, 1234AB, CITY" or "Street 123, 1234 AB, CITY"
+    # 2. "1234AB CITY" or "1234 AB CITY"
+    # 3. "CITY" (just city name)
+    
+    # Try pattern: comma-separated parts with postal code
+    # Look for postal code (4 digits + 2 letters) followed by city
+    postal_match = re.search(r'[1-9]\d{3}\s*[A-Z]{2}[,\s]+([A-Za-z][A-Za-z\s\'-]+?)(?:,|$)', address)
+    if postal_match:
+        city = postal_match.group(1).strip()
+        # Clean up - remove any trailing numbers or special chars
+        city = re.sub(r'[\d]+$', '', city).strip()
+        return city
+    
+    # Try pattern: parts separated by commas, city is usually last or second to last
+    parts = [p.strip() for p in address.split(',')]
+    if len(parts) >= 2:
+        # Check last part - it might be city
+        last_part = parts[-1].strip()
+        # Remove postal code if present at start
+        last_clean = re.sub(r'^[1-9]\d{3}\s*[A-Z]{2}\s*', '', last_part).strip()
+        if last_clean and not last_clean[0].isdigit():
+            return last_clean
+        
+        # Try second to last part
+        if len(parts) >= 3:
+            second_last = parts[-2].strip()
+            second_clean = re.sub(r'^[1-9]\d{3}\s*[A-Z]{2}\s*', '', second_last).strip()
+            if second_clean and not second_clean[0].isdigit():
+                return second_clean
+    
+    # Fallback: remove street address and postal code from beginning
+    # Pattern: "Street 123, 1234AB CITY" -> "CITY"
+    cleaned = re.sub(r'^[^,]+,\s*', '', address)  # Remove street part
+    cleaned = re.sub(r'^[1-9]\d{3}\s*[A-Z]{2}\s*', '', cleaned).strip()  # Remove postal code
+    
+    if cleaned and not cleaned[0].isdigit() and len(cleaned) > 2:
+        return cleaned
+    
+    return None
+
+
+def get_coordinates(location: str) -> Optional[Tuple[float, float]]:
+    """
+    Get latitude and longitude for a location string
+    
+    Args:
+        location: Location string (city name, address, etc.)
+        
+    Returns:
+        Tuple of (latitude, longitude) or None if not found
+    """
+    if not location:
+        return None
+    
+    # Check cache first
+    location_key = location.lower().strip()
+    if location_key in _geocoding_cache:
+        return _geocoding_cache[location_key]
+    
+    try:
+        # Add Netherlands to improve accuracy
+        search_query = f"{location}, Netherlands"
+        # Reduced timeout from 10s to 3s to minimize impact of failures
+        # With 2 retries at urllib3 level, max wait time is ~9s instead of ~30s
+        result = geolocator.geocode(search_query, timeout=3)  # type: ignore
+        
+        if result:
+            coords = (result.latitude, result.longitude)  # type: ignore
+            _geocoding_cache[location_key] = coords
+            logger.debug(f"Geocoded {location} -> {coords}")
+            
+            # Delay to respect Nominatim rate limits (1 request/second)
+            time.sleep(1.5)
+            
+            return coords
+        else:
+            # Cache the failure to avoid retrying the same address
+            _geocoding_cache[location_key] = None
+            logger.warning(f"Could not geocode location: {location}")
+            return None
+    
+    except Exception as e:
+        # Cache the failure to avoid retrying the same address
+        _geocoding_cache[location_key] = None
+        logger.error(f"Error geocoding {location}: {e}")
+        return None
+
+
+def extract_city_from_address(address: str) -> Optional[str]:
+    """
+    Extract just the city name from a full address string
+    
+    Args:
+        address: Full address string (e.g., "Kelvinstraat 4, 6003 DH, WEERT" or "1234AB Amsterdam")
+        
+    Returns:
+        City name or None if cannot be extracted
+    """
+    if not address:
+        return None
+    
+    import re
+    
+    # Common Dutch address formats:
+    # 1. "Street 123, 1234AB, CITY" or "Street 123, 1234 AB, CITY"
+    # 2. "1234AB CITY" or "1234 AB CITY"
+    # 3. "CITY" (just city name)
+    
+    # Try pattern: comma-separated parts with postal code
+    # Look for postal code (4 digits + 2 letters) followed by city
+    postal_match = re.search(r'[1-9]\d{3}\s*[A-Z]{2}[,\s]+([A-Za-z][A-Za-z\s\'-]+?)(?:,|$)', address)
+    if postal_match:
+        city = postal_match.group(1).strip()
+        # Clean up - remove any trailing numbers or special chars
+        city = re.sub(r'[\d]+$', '', city).strip()
+        return city
+    
+    # Try pattern: parts separated by commas, city is usually last or second to last
+    parts = [p.strip() for p in address.split(',')]
+    if len(parts) >= 2:
+        # Check last part - it might be city
+        last_part = parts[-1].strip()
+        # Remove postal code if present at start
+        last_clean = re.sub(r'^[1-9]\d{3}\s*[A-Z]{2}\s*', '', last_part).strip()
+        if last_clean and not last_clean[0].isdigit():
+            return last_clean
+        
+        # Try second to last part
+        if len(parts) >= 3:
+            second_last = parts[-2].strip()
+            second_clean = re.sub(r'^[1-9]\d{3}\s*[A-Z]{2}\s*', '', second_last).strip()
+            if second_clean and not second_clean[0].isdigit():
+                return second_clean
+    
+    # Fallback: remove street address and postal code from beginning
+    # Pattern: "Street 123, 1234AB CITY" -> "CITY"
+    cleaned = re.sub(r'^[^,]+,\s*', '', address)  # Remove street part
+    cleaned = re.sub(r'^[1-9]\d{3}\s*[A-Z]{2}\s*', '', cleaned).strip()  # Remove postal code
+    
+    if cleaned and not cleaned[0].isdigit() and len(cleaned) > 2:
+        return cleaned
+    
+    return None
+
+
+def extract_province_from_location(city: str, coords: Tuple[float, float] = None) -> Optional[str]:
+    """
+    Extract province name from a city using geocoding
+    
+    Args:
+        city: City name
+        coords: Optional coordinates if already known
+        
+    Returns:
+        Province name or None if cannot be determined
+    """
+    if not city and not coords:
+        return None
+    
+    try:
+        # If we have coords, do reverse geocoding
+        if coords:
+            from geopy.geocoders import Nominatim
+            result = geolocator.reverse(coords, language='nl')
+            if result and result.raw:
+                address = result.raw.get('address', {})
+                # Try different keys for province/state
+                province = (address.get('state') or 
+                          address.get('province') or 
+                          address.get('county'))
+                if province:
+                    return province
+        
+        # If we have city name, geocode it and extract province from result
+        if city:
+            result = geolocator.geocode(f"{city}, Netherlands", language='nl')
+            if result and result.raw:
+                address = result.raw.get('address', {})
+                province = (address.get('state') or 
+                          address.get('province') or 
+                          address.get('county'))
+                if province:
+                    return province
+    
+    except Exception as e:
+        logger.debug(f"Error extracting province for {city}: {e}")
+    
+    return None
+
+
+def extract_city_from_address(address: str) -> Optional[str]:
+    """
+    Extract just the city name from a full address string
+    
+    Args:
+        address: Full address string (e.g., "Kelvinstraat 4, 6003 DH, WEERT" or "1234AB Amsterdam")
+        
+    Returns:
+        City name or None if cannot be extracted
+    """
+    if not address:
+        return None
+    
+    import re
+    
+    # Common Dutch address formats:
+    # 1. "Street 123, 1234AB, CITY" or "Street 123, 1234 AB, CITY"
+    # 2. "1234AB CITY" or "1234 AB CITY"
+    # 3. "CITY" (just city name)
+    # 4. "Neem vooraf telefonisch contact met ons op:+31850003358, 1101 CL, AMSTERDAM"
+    
+    # First, clean up phone numbers and contact info
+    # Remove phone-related text: "Neem ... contact ... op: +31..."
+    address = re.sub(r'[Nn]eem\s+.*?\s+contact\s+.*?:\s*\+?\d[\d\s\-]+,?\s*', '', address)
+    
+    # Try pattern: comma-separated parts with postal code
+    # Look for postal code (4 digits + 2 letters) followed by city
+    postal_match = re.search(r'[1-9]\d{3}\s*[A-Z]{2}[,\s]+([A-Za-z][A-Za-z\s\'-]+?)(?:,|$)', address)
+    if postal_match:
+        city = postal_match.group(1).strip()
+        # Clean up - remove any trailing numbers or special chars
+        city = re.sub(r'[\d]+$', '', city).strip()
+        return city
+    
+    # Try pattern: parts separated by commas, city is usually last or second to last
+    parts = [p.strip() for p in address.split(',')]
+    if len(parts) >= 2:
+        # Check last part - it might be city
+        last_part = parts[-1].strip()
+        # Remove postal code if present at start
+        last_clean = re.sub(r'^[1-9]\d{3}\s*[A-Z]{2}\s*', '', last_part).strip()
+        if last_clean and not last_clean[0].isdigit() and len(last_clean) > 2:
+            return last_clean
+        
+        # Try second to last part
+        if len(parts) >= 3:
+            second_last = parts[-2].strip()
+            second_clean = re.sub(r'^[1-9]\d{3}\s*[A-Z]{2}\s*', '', second_last).strip()
+            if second_clean and not second_clean[0].isdigit() and len(second_clean) > 2:
+                return second_clean
+    
+    # Fallback: remove street address and postal code from beginning
+    # Pattern: "Street 123, 1234AB CITY" -> "CITY"
+    cleaned = re.sub(r'^[^,]+,\s*', '', address)  # Remove street part
+    cleaned = re.sub(r'^[1-9]\d{3}\s*[A-Z]{2}\s*', '', cleaned).strip()  # Remove postal code
+    
+    if cleaned and not cleaned[0].isdigit() and len(cleaned) > 2:
+        return cleaned
+    
+    return None
+
+
+def extract_province_from_location(city: str = "", coords: Optional[Tuple[float, float]] = None) -> Optional[str]:
+    """
+    Extract province name from a city using geocoding
+    
+    Args:
+        city: City name
+        coords: Optional coordinates if already known
+        
+    Returns:
+        Province name or None if cannot be determined
+    """
+    if not city and not coords:
+        return None
+    
+    try:
+        # If we have coords, do reverse geocoding
+        if coords:
+            from geopy.geocoders import Nominatim
+            result = geolocator.reverse(coords, language='nl')
+            if result and result.raw:
+                address_data = result.raw.get('address', {})
+                # Try different keys for province/state
+                province = (address_data.get('state') or 
+                          address_data.get('province') or 
+                          address_data.get('county'))
+                if province:
+                    return province
+        
+        # If we have city name, geocode it and extract province from result
+        if city:
+            result = geolocator.geocode(f"{city}, Netherlands", language='nl')
+            if result and result.raw:
+                address_data = result.raw.get('address', {})
+                province = (address_data.get('state') or 
+                          address_data.get('province') or 
+                          address_data.get('county'))
+                if province:
+                    return province
+    
+    except Exception as e:
+        logger.debug(f"Error extracting province for {city}: {e}")
+    
+    return None
+
+
+def calculate_distance_from_heerenveen(location: Optional[str] = None, coords: Optional[Tuple[float, float]] = None) -> Optional[float]:
+    """
+    Calculate driving distance from Heerenveen in kilometers using OSRM routing
+    
+    Args:
+        location: Location string (city name, address, etc.)
+        coords: Tuple of (latitude, longitude) if already known
+        
+    Returns:
+        Driving distance in kilometers or None if cannot be calculated
+    """
+    target_coords = coords
+    
+    # Get coordinates if not provided
+    if not target_coords and location:
+        # Extract city name from location string (remove postal code, etc.)
+        # Common formats: "Amsterdam", "1234AB Amsterdam", "Amsterdam, Noord-Holland"
+        city_parts = location.split(',')[0].strip()  # Get first part before comma
+        # Remove postal code pattern (digits + letters)
+        import re
+        city = re.sub(r'^\d+[A-Z]*\s+', '', city_parts).strip()
+        
+        if city:
+            target_coords = get_coordinates(city)
+        else:
+            target_coords = get_coordinates(location)
+    
+    if not target_coords:
+        return None
+    
+    try:
+        # Use OSRM public API for driving distance
+        # Format: http://router.project-osrm.org/route/v1/driving/lon1,lat1;lon2,lat2
+        # Note: OSRM uses (longitude, latitude) format, not (latitude, longitude)
+        
+        # Heerenveen coordinates: (lat, lon) = (52.9594, 5.9201)
+        # Target coordinates: (lat, lon)
+        url = f"http://router.project-osrm.org/route/v1/driving/{HEERENVEEN_COORDS[1]},{HEERENVEEN_COORDS[0]};{target_coords[1]},{target_coords[0]}"
+        params = {
+            'overview': 'false',  # We don't need the route geometry
+            'steps': 'false'      # We don't need turn-by-turn directions
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get('code') == 'Ok' and data.get('routes'):
+            # Distance is in meters, convert to kilometers
+            distance_km = data['routes'][0]['distance'] / 1000.0
+            logger.debug(f"Calculated driving distance from Heerenveen to {location or target_coords}: {distance_km:.2f} km")
+            return round(distance_km, 2)
+        else:
+            logger.warning(f"OSRM API did not return a route: {data.get('code')}")
+            # Fallback to geodesic (straight-line) distance
+            distance = geodesic(HEERENVEEN_COORDS, target_coords).kilometers
+            logger.debug(f"Using geodesic fallback distance: {distance:.2f} km")
+            return round(distance, 2)
+            
+    except Exception as e:
+        logger.error(f"Error calculating driving distance (falling back to geodesic): {e}")
+        # Fallback to geodesic distance on error
+        try:
+            distance = geodesic(HEERENVEEN_COORDS, target_coords).kilometers
+            return round(distance, 2)
+        except Exception as e2:
+            logger.error(f"Error calculating geodesic distance: {e2}")
+            return None
+
+
+def is_mild_hybrid(fuel_type_str: str = None, model_str: str = None) -> bool:
+    """
+    Detect if a vehicle is a mild hybrid (MHEV/eTSI) which should be excluded
+    
+    Mild hybrids cannot be plugged in and have no electric-only range.
+    They use a small battery to assist the engine but cannot drive on electricity alone.
+    
+    Args:
+        fuel_type_str: Raw fuel type string from website
+        model_str: Vehicle model string (mild hybrid designation often appears here)
+        
+    Returns:
+        True if vehicle is a mild hybrid, False otherwise
+    """
+    # Check fuel type string
+    if fuel_type_str:
+        fuel_lower = fuel_type_str.lower().strip()
+        # Mild hybrid indicators
+        if any(term in fuel_lower for term in ['mhev', 'mild hybrid', 'mild-hybrid', 'etsi', 'e-tsi']):
+            return True
+    
+    # Check model string  
+    if model_str:
+        model_lower = model_str.lower().strip()
+        # Mild hybrid indicators in model name
+        if any(term in model_lower for term in ['mhev', 'mild hybrid', 'mild-hybrid', 'etsi', 'e-tsi']):
+            return True
+    
+    return False
+
+
+def normalize_model_name(model_str: str) -> str:
+    """
+    Extract clean model name from full model string
+    
+    Many car listing titles include extra information after the model name like:
+    - "EV6 Plus 77.4 kWh NL-Auto!! Leder I Camera I Apple Car" → "EV6"
+    - "Enyaq iV 80" → "Enyaq"
+    - "ID.4 Pro Performance 77 kWh" → "ID.4"
+    
+    Args:
+        model_str: Full model string from listing title
+        
+    Returns:
+        Clean model name (first 1-3 words that make up the actual model)
+    """
+    if not model_str:
+        return model_str
+    
+    import re
+    
+    # Split into words
+    words = model_str.split()
+    if not words:
+        return model_str
+    
+    # Patterns that indicate we've reached the trim/variant/features section
+    trim_indicators = [
+        r'^\d+\.?\d*\s*k?wh',  # Battery size: "77.4 kWh", "77kWh"
+        r'^\d+pk$',            # Power: "150pk"
+        r'^\d+kw$',            # Power: "110kW"
+        r'^iv\s+\d+',          # "iV 80", "iV 60" (Skoda trim levels)
+        r'^nl-auto',           # NL-Auto
+        r'^comfort',           # Trim levels
+        r'^luxury',
+        r'^business',
+        r'^sport',
+        r'^executive',
+        r'^dynamic',
+        r'^plus$',             # "Plus" trim (but not as part of model like "e-Niro Plus")
+        r'^premium',
+        r'^edition',
+        r'^pro$',              # "Pro" trim
+        r'^performance$',      # "Performance" trim
+        r'^line$',
+        r'^package',
+        r'^\|',                # Pipe separator
+        r'^-$',                # Dash separator
+        r'^camera',            # Features
+        r'^navi',
+        r'^leder',
+        r'^apple',
+        r'^android',
+        r'^acc$',
+    ]
+    
+    # Known multi-word models that should be kept together
+    multi_word_models = [
+        'e-tron', 'q4 e-tron', 'model 3', 'model s', 'model x', 'model y',
+        'i4', 'ix', 'ix3', 'mustang mach-e', 'ioniq 5', 'ioniq 6',
+        'e niro', 'e-niro', 'e soul', 'e-soul', 'id.3', 'id.4', 'id.5', 'id.7'
+    ]
+    
+    # Check if the full string starts with a known multi-word model
+    model_lower = model_str.lower()
+    for multi in multi_word_models:
+        if model_lower.startswith(multi):
+            # Return the multi-word model
+            return ' '.join(model_str.split()[:len(multi.split())])
+    
+    # Extract model name (usually first 1-3 words before trim indicators)
+    model_parts = []
+    for i, word in enumerate(words):
+        word_lower = word.lower()
+        
+        # Check if this word matches a trim indicator
+        is_trim = any(re.match(pattern, word_lower) for pattern in trim_indicators)
+        
+        if is_trim:
+            # Stop here - we've reached the trim/variant section
+            break
+        
+        # Check if this word + next word form a trim pattern (e.g., "iV 80")
+        if i + 1 < len(words):
+            two_word_pattern = f"{word_lower} {words[i + 1].lower()}"
+            is_two_word_trim = any(re.match(pattern, two_word_pattern) for pattern in trim_indicators)
+            if is_two_word_trim:
+                # Stop here - the current word starts a trim pattern
+                break
+        
+        # Add word to model parts
+        model_parts.append(word)
+        
+        # Stop after 3 words (most models are 1-3 words)
+        if len(model_parts) >= 3:
+            break
+        
+        # Special case: if next word looks like a trim level, stop here
+        if i + 1 < len(words):
+            next_word = words[i + 1].lower()
+            if any(re.match(pattern, next_word) for pattern in trim_indicators):
+                break
+    
+    # If we didn't find anything, return the first word
+    if not model_parts:
+        return words[0]
+    
+    return ' '.join(model_parts)
+
+
+def normalize_fuel_type(fuel_type_str: str, model_str: str = None) -> Optional[str]:
+    """
+    Normalize fuel type strings to standard values
+    
+    Args:
+        fuel_type_str: Raw fuel type string from website
+        model_str: Optional model string to help detect mild hybrids
+        
+    Returns:
+        Normalized fuel type: "Full Electric", "PHEV", "Hydrogen", or None
+        Returns None for benzine/diesel/gasoline (to be filtered out)
+    """
+    if not fuel_type_str:
+        return None
+    
+    fuel_lower = fuel_type_str.lower().strip()
+    
+    # Check for mild hybrids first - these should be excluded
+    if is_mild_hybrid(fuel_type_str, model_str):
+        logger.debug(f"Excluding mild hybrid: {fuel_type_str}")
+        return None  # Exclude mild hybrids
+    
+    # Check for PHEV first (before rejecting benzine)
+    # Dutch sites often use "Hybride benzine" or "Benzine hybrid"
+    if any(term in fuel_lower for term in ['hybride benzine', 'benzine hybride', 'hybrid benzine', 'benzine hybrid', 'phev', 'plug-in', 'plugin', 'plug in']):
+        return "PHEV"
+    
+    # Explicitly reject benzine/gasoline/diesel cars
+    benzine_terms = ['benzine', 'gasoline', 'petrol', 'diesel', 'gasoil', 'lpg', 'cng']
+    if any(term in fuel_lower for term in benzine_terms):
+        logger.debug(f"Rejecting benzine/diesel car: {fuel_type_str}")
+        return None
+    
+    # Hydrogen fuel cell variants (Toyota Mirai, Hyundai NEXO, etc.)
+    if any(term in fuel_lower for term in ['waterstof', 'hydrogen', 'fuel cell', 'fcev', 'h2']):
+        return "Hydrogen"
+    
+    # Electric variants
+    if any(term in fuel_lower for term in ['electric', 'elektrisch', 'ev', 'bev']):
+        if 'plug' in fuel_lower or 'hybrid' in fuel_lower or 'phev' in fuel_lower:
+            return "PHEV"
+        return "Full Electric"
+    
+    # PHEV variants
+    if any(term in fuel_lower for term in ['phev', 'plug-in', 'plugin']):
+        return "PHEV"
+    
+    # Hybrid (but not plug-in) - not what we're looking for
+    if 'hybrid' in fuel_lower:
+        logger.debug(f"Excluding non-PHEV hybrid: {fuel_type_str}")
+        return "Hybrid"  # Will be filtered out
+    
+    # If we get here, it's probably benzine/diesel without explicit keyword
+    logger.debug(f"Unknown fuel type (likely benzine/diesel): {fuel_type_str}")
+    return None
+
+
+def normalize_vehicle_type(vehicle_type_str: str, model_str: str = None, make_str: str = None) -> Optional[str]:
+    """
+    Normalize vehicle type strings to standard values
+    
+    Args:
+        vehicle_type_str: Raw vehicle type string from website
+        model_str: Optional model name to check if vehicle_type_str is empty
+        make_str: Optional make/brand name for model-specific classification
+        
+    Returns:
+        Normalized vehicle type: "SUV", "Stationwagon", or None
+    """
+    if not vehicle_type_str and not model_str:
+        return None
+    
+    # Check the vehicle_type_str first
+    if vehicle_type_str:
+        vehicle_lower = vehicle_type_str.lower().strip()
+        
+        # SUV variants
+        if any(term in vehicle_lower for term in ['suv', 'sport utility']):
+            return "SUV"
+        
+        # Stationwagon variants
+        if any(term in vehicle_lower for term in ['station', 'stationwagen', 'estate', 'kombi', 'wagon', 'tourer', 'sportstourer', 'sporttourer', 'variant', 'touring', 'avant']):
+            return "Stationwagon"
+    
+    # Check model-specific classification from config
+    if make_str and model_str and _vehicle_classification:
+        # Normalize model string for matching (handle spaces, dashes, dots)
+        model_normalized = model_str.lower().replace(' ', '').replace('-', '').replace('.', '')
+        
+        # Check SUV models
+        suv_models = _vehicle_classification.get('suv_models', {})
+        if make_str in suv_models:
+            model_keywords = suv_models[make_str]
+            for keyword in model_keywords:
+                keyword_normalized = keyword.lower().replace(' ', '').replace('-', '').replace('.', '')
+                if keyword_normalized in model_normalized:
+                    return "SUV"
+        
+        # Check Stationwagon models
+        wagon_models = _vehicle_classification.get('stationwagon_models', {})
+        if make_str in wagon_models:
+            model_keywords = wagon_models[make_str]
+            for keyword in model_keywords:
+                keyword_normalized = keyword.lower().replace(' ', '').replace('-', '').replace('.', '')
+                if keyword_normalized in model_normalized:
+                    return "Stationwagon"
+    
+    # Fallback: check the model name for keywords
+    if model_str:
+        model_lower = model_str.lower().strip()
+        
+        # SUV variants in model name
+        if any(term in model_lower for term in ['suv', 'sport utility']):
+            return "SUV"
+        
+        # Stationwagon variants in model name
+        if any(term in model_lower for term in ['station', 'stationwagen', 'estate', 'kombi', 'wagon', 'tourer', 'sportstourer', 'sporttourer', 'variant', 'touring', 'avant', 'break']):
+            return "Stationwagon"
+    
+    return None
+
+
+def should_exclude_vehicle(make_str: str, model_str: str) -> bool:
+    """
+    Check if a vehicle should be excluded (too small for family use)
+    
+    Args:
+        make_str: Vehicle make/brand
+        model_str: Vehicle model
+        
+    Returns:
+        True if vehicle should be excluded, False otherwise
+    """
+    if not _vehicle_classification:
+        return False
+    
+    import re
+    
+    exclude_models = _vehicle_classification.get('exclude_models', {})
+    if make_str in exclude_models:
+        model_keywords = exclude_models[make_str]
+        # If the list is empty, exclude all models from this make
+        if not model_keywords:
+            return True
+        # Otherwise check if any keyword matches
+        for keyword in model_keywords:
+            keyword_lower = str(keyword).lower()
+            model_lower = model_str.lower()
+            
+            # Use word boundary matching to avoid partial matches
+            # This ensures "3" matches "Mazda 3" but not "CX-30"
+            # Pattern: keyword must be preceded/followed by word boundary, space, or dash
+            pattern = r'(?:^|[\s\-])' + re.escape(keyword_lower) + r'(?:[\s\-]|$)'
+            if re.search(pattern, model_lower):
+                return True
+    
+    return False
+
+
+def extract_number(text: str) -> Optional[int]:
+    """
+    Extract first number from a string
+    
+    Args:
+        text: String potentially containing a number
+        
+    Returns:
+        Extracted integer or None
+    """
+    if not text:
+        return None
+    
+    import re
+    # Remove non-numeric characters except digits
+    numbers = re.findall(r'\d+', str(text).replace('.', '').replace(',', ''))
+    
+    if numbers:
+        return int(numbers[0])
+    
+    return None
+
+
+def extract_price(text: str) -> Optional[float]:
+    """
+    Extract price from a string
+    
+    Args:
+        text: String containing price (e.g., "€ 25.000", "25000 EUR")
+        
+    Returns:
+        Price as float or None
+    """
+    if not text:
+        return None
+    
+    import re
+    # Remove currency symbols and spaces
+    cleaned = str(text).replace('€', '').replace('EUR', '').replace(' ', '').replace('.', '').replace(',', '.')
+    
+    # Extract number
+    match = re.search(r'\d+\.?\d*', cleaned)
+    if match:
+        try:
+            return float(match.group())
+        except ValueError:
+            return None
+    
+    return None
+
+
+def format_price(price: float) -> str:
+    """
+    Format price for display
+    
+    Args:
+        price: Price value
+        
+    Returns:
+        Formatted price string (e.g., "€25,000")
+    """
+    if price is None:
+        return "N/A"
+    
+    return f"€{price:,.0f}".replace(',', '.')
+
+
+def format_mileage(mileage_km: int) -> str:
+    """
+    Format mileage for display
+    
+    Args:
+        mileage_km: Mileage in kilometers
+        
+    Returns:
+        Formatted mileage string (e.g., "45,000 km")
+    """
+    if mileage_km is None:
+        return "N/A"
+    
+    return f"{mileage_km:,} km".replace(',', '.')
+
+
+def is_within_budget(price: float, vehicle_type: str, search_config: dict) -> bool:
+    """
+    Check if car price is within budget for vehicle type
+    
+    Args:
+        price: Car price
+        vehicle_type: Vehicle type (SUV, Stationwagon)
+        search_config: Search configuration from config.yaml
+        
+    Returns:
+        True if within budget, False otherwise
+    """
+    if not price or not vehicle_type:
+        return False
+    
+    for vehicle_config in search_config['vehicle_types']:
+        if vehicle_config['type'] == vehicle_type:
+            return price <= vehicle_config['max_price']
+    
+    return False
+
+
+def meets_range_requirement(fuel_type: str, range_km: int, electric_range_km: int, search_config: dict) -> bool:
+    """
+    Check if car meets range requirements
+    
+    Args:
+        fuel_type: Fuel type (Full Electric, PHEV)
+        range_km: Total range in km
+        electric_range_km: Electric-only range for PHEV
+        search_config: Search configuration from config.yaml
+        
+    Returns:
+        True if meets requirements, False otherwise
+    """
+    if not fuel_type:
+        return False
+    
+    for fuel_config in search_config['fuel_types']:
+        if fuel_config['type'] == fuel_type:
+            if fuel_type == "Full Electric":
+                return range_km >= fuel_config.get('min_range_km', 0)
+            elif fuel_type == "PHEV":
+                return electric_range_km >= fuel_config.get('min_electric_range_km', 0)
+    
+    return False
+
+
+def check_feature_match(required_feature: str, car_features: list) -> bool:
+    """
+    Check if a required feature is present in car features using fuzzy matching
+    
+    Args:
+        required_feature: The required feature name to search for
+        car_features: List of feature strings from the car listing
+        
+    Returns:
+        True if the feature is found (exact or fuzzy match), False otherwise
+    """
+    if not car_features:
+        return False
+    
+    required_lower = required_feature.lower().strip()
+    found_features = [f.lower().strip() for f in car_features if f]
+    
+    # Define keyword mappings for common variations
+    # Maps required feature names to all possible variations (Dutch, English, abbreviations)
+    feature_keywords = {
+        # Critical features (10 must-haves)
+        'adaptive cruise control': [
+            'adaptive cruise control', 
+            'adaptieve cruise control',
+            'adaptieve cruisecontrol',
+            'acc',
+            'adaptive cruise',
+            'adaptief cruise'
+        ],
+        'android auto': [
+            'android auto', 
+            'apple carplay', 
+            'carplay',
+            'smartphone integratie'
+        ],
+        'navigatiesysteem': [
+            'navigatie', 
+            'navigatiesysteem', 
+            'navigation', 
+            'navi', 
+            'gps',
+            'navigatiesystem'
+        ],
+        'dab+ radio': [
+            'dab+', 
+            'dab radio', 
+            'digital radio', 
+            'dab',
+            'digitale radio',
+            'digitale radio-ontvangst',
+            'dab-radio'
+        ],
+        'achteruitrijcamera': [
+            'achteruitrijcamera', 
+            'rear camera', 
+            'camera', 
+            'reversing camera', 
+            'parkeerhulp met camera',
+            'achteruit camera',
+            'achteruitrij camera',
+            'rear view camera',
+            'backup camera',
+            'rearview camera'
+        ],
+        'climate control': [
+            'climate control', 
+            'climatronic', 
+            'airco', 
+            'climate',
+            'airconditioning',
+            'dual climate',
+            'multi-zone climate'
+        ],
+        'hill hold': [
+            'hill hold', 
+            'hill-hold', 
+            'hill start', 
+            'heuvelstart', 
+            'bergstart',
+            'hill start assist',
+            'heuvelstarthulp'
+        ],
+        'lane assist': [
+            'lane assist', 
+            'lane keeping', 
+            'lka', 
+            'lane departure',
+            'lane departure warning',
+            'lane keeping assist',
+            'rijstrookassistent',
+            'rijstrook assistent',
+            'lane departure warning systeem',
+            'ldws'
+        ],
+        'park assist': [
+            'park assist', 
+            'parkeerhulp', 
+            'parking assist', 
+            'parking sensors', 
+            'parkeersensoren',
+            'parkeer hulp',
+            'parking aid',
+            'parkeersensor',
+            'inparkeer hulp',
+            'inparkeerhulp'
+        ],
+        'trekhaak': [
+            'trekhaak', 
+            'tow hitch', 
+            'towbar', 
+            'tow bar',
+            'trek haak',
+            'towing hitch',
+            'anhängerkupplung'
+        ],
+        # Nice-to-have features
+        'dodehoekdetectie': [
+            'dodehoekdetectie', 
+            'blind spot', 
+            'blis', 
+            'dode hoek',
+            'dode hoek detectie',
+            'blind spot detection',
+            'blind spot monitor'
+        ],
+        'led koplampen': [
+            'led koplampen', 
+            'led headlight', 
+            'led verlichting',
+            'led-koplampen',
+            'led koplamp',
+            'led headlights'
+        ],
+        'stoelverwarming': [
+            'stoelverwarming', 
+            'heated seat', 
+            'stoel verwarming',
+            'verwarmde stoelen',
+            'heated seats',
+            'seat heating'
+        ],
+        'leren bekleding': [
+            'leren bekleding', 
+            'leather', 
+            'leer',
+            'lederen bekleding',
+            'leather interior',
+            'leather seats'
+        ],
+        'stuurverwarming': [
+            'stuurverwarming', 
+            'heated steering', 
+            'stuur verwarming',
+            'stuurwielverwarming',
+            'stuurwiel verwarming',
+            'verwarmde stuur',
+            'verwarmde stuurwiel',
+            'heated steering wheel'
+        ],
+        'keyless entry': [
+            'keyless entry', 
+            'keyless go', 
+            'keyless',
+            'keyless start',
+            'start/stop knop',
+            'keyless access'
+        ]
+    }
+    
+    # Check for exact match first
+    if required_lower in found_features:
+        return True
+    
+    # Check for partial match using keywords
+    keywords = feature_keywords.get(required_lower, [required_lower])
+    for feature in found_features:
+        if any(keyword in feature for keyword in keywords):
+            return True
+    
+    return False
+
+
+def match_required_features(required_features: list, car_features: list) -> tuple:
+    """
+    Match required features against car features using fuzzy matching
+    
+    Args:
+        required_features: List of required feature names
+        car_features: List of feature strings from the car listing
+        
+    Returns:
+        Tuple of (present_features, missing_features) where each is a list of feature names
+    """
+    present = []
+    missing = []
+    
+    for required in required_features:
+        if check_feature_match(required, car_features):
+            present.append(required)
+        else:
+            missing.append(required)
+    
+    return present, missing
+
+
+# WLTP range data cache
+_wltp_ranges = None
+
+# Boot space data cache
+_boot_space = None
+
+# EV-Database range data cache
+_ev_database_ranges = None
+
+# Towing capacity data cache
+_towing_capacity = None
+
+
+def _load_wltp_ranges() -> dict:
+    """
+    Load WLTP range data from YAML file
+    
+    Returns:
+        Dictionary with WLTP range data or empty dict if file not found
+    """
+    global _wltp_ranges
+    
+    if _wltp_ranges is not None:
+        return _wltp_ranges
+    
+    try:
+        wltp_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'wltp_ranges.yaml')
+        with open(wltp_path, 'r') as f:
+            _wltp_ranges = yaml.safe_load(f)
+            logger.debug("WLTP ranges loaded successfully")
+            return _wltp_ranges
+    except Exception as e:
+        logger.warning(f"Could not load WLTP ranges: {e}")
+        _wltp_ranges = {}
+        return _wltp_ranges
+
+
+def extract_battery_size(model_str: str) -> Optional[str]:
+    """
+    Extract battery size from model name
+    
+    Args:
+        model_str: Model string (e.g., "ID.4 Pro 77 kWh", "iX xDrive50")
+        
+    Returns:
+        Battery size as string (e.g., "77", "105") or None if not found
+    """
+    if not model_str:
+        return None
+    
+    import re
+    
+    # Look for patterns like "77 kWh", "77kWh", "80 kwh"
+    kwh_match = re.search(r'(\d+)\s*k?wh', model_str, re.IGNORECASE)
+    if kwh_match:
+        return kwh_match.group(1)
+    
+    # Don't extract numbers from model variant names like "iV 80", "EV6", "i4"
+    # These are model designations, not battery sizes
+    # Exception: If the number is >38 and appears after certain keywords
+    
+    # Look for standalone battery sizes (e.g., "60", "77", "82")
+    # Common battery sizes: 39-107 kWh range
+    # But avoid matching model numbers like "iV 80" in "Enyaq iV 80"
+    
+    # Skip if number appears right after "iV", "EV", "i" (model designation)
+    if re.search(r'\b(iv|ev|i)\s*\d+', model_str, re.IGNORECASE):
+        # This is likely a model designation, not battery size
+        # However, still check for explicit kWh mentions elsewhere in the string
+        pass
+    
+    # Look for numbers in battery range that aren't model designations
+    number_match = re.search(r'\b(3[9]|4[0-9]|5[0-8]|6[0-9]|7[0-9]|8[0-9]|9[0-9]|10[0-7])\b', model_str)
+    if number_match:
+        # Extra validation: make sure it's not part of a model designation
+        num = number_match.group(1)
+        # Get context around the number
+        match_pos = number_match.start()
+        before_text = model_str[max(0, match_pos-5):match_pos].lower()
+        
+        # If preceded by model designation indicators, skip it
+        if not any(x in before_text for x in ['iv ', 'ev', 'i ', 'model ']):
+            return num
+    
+    return None
+
+
+def _load_boot_space() -> dict:
+    """
+    Load boot space data from YAML file
+    
+    Returns:
+        Dictionary with boot space data or empty dict if file not found
+    """
+    global _boot_space
+    
+    if _boot_space is not None:
+        return _boot_space
+    
+    try:
+        boot_space_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'boot_space.yaml')
+        with open(boot_space_path, 'r') as f:
+            _boot_space = yaml.safe_load(f)
+            logger.debug("Boot space data loaded successfully")
+            return _boot_space
+    except Exception as e:
+        logger.warning(f"Could not load boot space data: {e}")
+        _boot_space = {}
+        return _boot_space
+
+
+def get_boot_space(make: str, model: str) -> Optional[dict]:
+    """
+    Get boot space data for a vehicle based on make and model
+    
+    Args:
+        make: Vehicle make (e.g., "Volkswagen", "Tesla")
+        model: Vehicle model (e.g., "ID.4", "Model Y")
+        
+    Returns:
+        Dictionary with 'normal' and 'seats_down' boot space in liters, or None if not found
+    """
+    if not make or not model:
+        return None
+    
+    boot_data = _load_boot_space()
+    if not boot_data:
+        return None
+    
+    # Normalize make name (case-insensitive lookup)
+    make_normalized = make.strip()
+    model_lower = model.lower()
+    
+    # Find make data (case-insensitive)
+    make_data = None
+    for boot_make, boot_models in boot_data.items():
+        if boot_make.lower() == make_normalized.lower():
+            make_data = boot_models
+            break
+    
+    if not make_data:
+        return None
+    
+    # Try to find matching model
+    best_match = None
+    best_match_score = 0
+    
+    for model_pattern, space_data in make_data.items():
+        # Check if model pattern matches
+        # Handle numeric model names (e.g., Polestar 2, 3, 4)
+        model_pattern_str = str(model_pattern)
+        model_pattern_lower = model_pattern_str.lower()
+        
+        # Score the match based on how many words overlap
+        pattern_words = set(model_pattern_lower.split())
+        model_words = set(model_lower.split())
+        overlap = pattern_words & model_words
+        match_score = len(overlap)
+        
+        # Also give points for substring matching
+        if model_pattern_lower in model_lower or model_lower in model_pattern_lower:
+            match_score += 5
+        
+        if match_score > best_match_score:
+            best_match_score = match_score
+            best_match = space_data
+    
+    if best_match and best_match_score > 0:
+        logger.debug(f"Found boot space for {make} {model}: {best_match}")
+        return best_match
+    
+    return None
+
+
+def _load_towing_capacity() -> dict:
+    """
+    Load towing capacity data from YAML file
+    
+    Returns:
+        Dictionary with towing capacity data or empty dict if file not found
+    """
+    global _towing_capacity
+    
+    if _towing_capacity is not None:
+        return _towing_capacity
+    
+    try:
+        towing_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'towing_capacity.yaml')
+        with open(towing_path, 'r') as f:
+            _towing_capacity = yaml.safe_load(f)
+            logger.debug("Towing capacity data loaded successfully")
+            return _towing_capacity
+    except Exception as e:
+        logger.warning(f"Could not load towing capacity data: {e}")
+        _towing_capacity = {}
+        return _towing_capacity
+
+
+def get_towing_capacity(make: str, model: str) -> Optional[int]:
+    """
+    Get towing capacity for a vehicle based on make and model
+    
+    Args:
+        make: Vehicle make (e.g., "Volkswagen", "Tesla")
+        model: Vehicle model (e.g., "ID.4", "Model Y")
+        
+    Returns:
+        Maximum braked towing capacity in kg, or None if not found
+    """
+    if not make or not model:
+        return None
+    
+    towing_data = _load_towing_capacity()
+    if not towing_data:
+        return None
+    
+    # Normalize make name (case-insensitive lookup)
+    make_normalized = make.strip()
+    model_lower = model.lower()
+    
+    # Find make data (case-insensitive)
+    make_data = None
+    for towing_make, towing_models in towing_data.items():
+        if towing_make.lower() == make_normalized.lower():
+            make_data = towing_models
+            break
+    
+    if not make_data:
+        return None
+    
+    # Try to find matching model
+    best_match = None
+    best_match_score = 0
+    
+    for model_pattern, capacity in make_data.items():
+        # Check if model pattern matches
+        # Handle numeric model names (e.g., Polestar 2, 3, 4)
+        model_pattern_str = str(model_pattern)
+        model_pattern_lower = model_pattern_str.lower()
+        
+        # Score the match based on how many words overlap
+        pattern_words = set(model_pattern_lower.split())
+        model_words = set(model_lower.split())
+        overlap = pattern_words & model_words
+        match_score = len(overlap)
+        
+        # Also give points for substring matching
+        if model_pattern_lower in model_lower or model_lower in model_pattern_lower:
+            match_score += 5
+        
+        if match_score > best_match_score:
+            best_match_score = match_score
+            best_match = capacity
+    
+    if best_match is not None and best_match_score > 0:
+        logger.debug(f"Found towing capacity for {make} {model}: {best_match} kg")
+        return best_match
+    
+    return None
+
+
+def validate_fuel_type_by_battery(fuel_type: str, battery_size: Optional[float], model: str) -> tuple[str, list]:
+    """
+    Validate and potentially correct fuel_type based on battery size
+    
+    PHEVs typically have 8-18 kWh batteries, while Full Electric vehicles have 30+ kWh batteries.
+    This function checks for misclassifications and returns corrections with warnings.
+    
+    Args:
+        fuel_type: Current fuel type classification (e.g., "Full Electric", "PHEV")
+        battery_size: Battery capacity in kWh (if known)
+        model: Vehicle model name (used for additional validation)
+    
+    Returns:
+        Tuple of (corrected_fuel_type, list_of_warnings)
+        
+    Examples:
+        >>> validate_fuel_type_by_battery("PHEV", 64.0, "Niro")
+        ("Full Electric", ["Suspicious: PHEV with large battery (64.0 kWh) - corrected to Full Electric"])
+        
+        >>> validate_fuel_type_by_battery("Full Electric", 12.0, "Niro PHEV")
+        ("PHEV", ["Suspicious: Full Electric with small battery (12.0 kWh) - corrected to PHEV"])
+    """
+    warnings = []
+    
+    if not battery_size or not fuel_type:
+        return fuel_type, warnings
+    
+    # Full Electric validation
+    if fuel_type == 'Full Electric':
+        if battery_size < 30:
+            warning = f"Suspicious: Full Electric with small battery ({battery_size} kWh)"
+            warnings.append(warning)
+            logger.warning(warning)
+            
+            # Check if model name suggests PHEV
+            model_lower = model.lower()
+            if any(keyword in model_lower for keyword in ['phev', 'plug-in', 'hybrid', 'e-hybrid']):
+                corrected = "PHEV"
+                correction_msg = f" - corrected to {corrected}"
+                warnings[-1] += correction_msg
+                logger.info(f"Correcting fuel type for {model}: Full Electric -> {corrected}")
+                return corrected, warnings
+    
+    # PHEV validation  
+    elif fuel_type == 'PHEV':
+        if battery_size > 30:
+            warning = f"Suspicious: PHEV with large battery ({battery_size} kWh)"
+            warnings.append(warning)
+            logger.warning(warning)
+            
+            # Large battery (>30 kWh) strongly indicates Full Electric, not PHEV
+            # PHEVs rarely exceed 20 kWh
+            corrected = "Full Electric"
+            correction_msg = f" - corrected to {corrected}"
+            warnings[-1] += correction_msg
+            logger.info(f"Correcting fuel type for {model}: PHEV -> {corrected}")
+            return corrected, warnings
+    
+    return fuel_type, warnings
+
+
+def _load_ev_database_ranges() -> dict:
+    """
+    Load EV-Database real-world range data from YAML file
+    
+    Returns:
+        Dictionary with EV-Database range data or empty dict if file not found
+    """
+    global _ev_database_ranges
+    
+    if _ev_database_ranges is not None:
+        return _ev_database_ranges
+    
+    try:
+        ev_db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'ev_database_ranges.yaml')
+        with open(ev_db_path, 'r') as f:
+            _ev_database_ranges = yaml.safe_load(f)
+            logger.debug("EV-Database ranges loaded successfully")
+            return _ev_database_ranges
+    except Exception as e:
+        logger.warning(f"Could not load EV-Database ranges: {e}")
+        _ev_database_ranges = {}
+        return _ev_database_ranges
+
+
+def get_ev_database_range(make: str, model: str, fuel_type: str = None) -> Optional[dict]:
+    """
+    Get EV-Database real-world range data for a vehicle
+    
+    Args:
+        make: Vehicle make (e.g., "Volkswagen", "Tesla")
+        model: Vehicle model (e.g., "ID.4 Pro 77 kWh", "Model 3 Long Range")
+        fuel_type: Optional fuel type - if PHEV, returns None (EV-Database only has Full EV data)
+        
+    Returns:
+        Dictionary with range data including:
+        - real_range: EVDB Real Range (realistic average)
+        - combined_mild: Combined range in mild weather (23°C)
+        - combined_cold: Combined range in cold weather (-10°C)
+        - city_mild: City range in mild weather
+        - highway_mild: Highway range in mild weather (110 km/h)
+        - city_cold: City range in cold weather
+        - highway_cold: Highway range in cold weather
+        Returns None if not found
+    """
+    if not make or not model:
+        return None
+    
+    # EV-Database only has Full Electric vehicle data, not PHEVs
+    if fuel_type and fuel_type.lower() in ['phev', 'plug-in hybrid', 'hybrid']:
+        logger.debug(f"Skipping EV-Database range for PHEV: {make} {model}")
+        return None
+    
+    ev_db_data = _load_ev_database_ranges()
+    if not ev_db_data:
+        return None
+    
+    # Normalize make name (case-insensitive lookup)
+    make_normalized = make.strip()
+    model_lower = model.lower()
+    
+    # Find make data (case-insensitive)
+    make_data = None
+    for ev_make, ev_models in ev_db_data.items():
+        if ev_make.lower() == make_normalized.lower():
+            make_data = ev_models
+            break
+    
+    if not make_data:
+        return None
+    
+    # Try to find matching model using fuzzy matching
+    best_match = None
+    best_match_score = 0
+    
+    for model_pattern, range_data in make_data.items():
+        # Check if model pattern matches
+        model_pattern_lower = model_pattern.lower()
+        
+        # Score the match based on how many words overlap
+        pattern_words = set(model_pattern_lower.split())
+        model_words = set(model_lower.split())
+        overlap = pattern_words & model_words
+        match_score = len(overlap)
+        
+        # Prioritize exact matches (give them a very high score)
+        if model_pattern_lower == model_lower:
+            match_score += 100
+        # Also give points for substring matching
+        elif model_pattern_lower in model_lower or model_lower in model_pattern_lower:
+            match_score += 5
+        
+        if match_score > best_match_score:
+            best_match_score = match_score
+            best_match = range_data
+    
+    if best_match and best_match_score > 0:
+        logger.debug(f"Found EV-Database range for {make} {model}: {best_match}")
+        return best_match
+    
+    return None
+
+
+def _query_rdw_wltp_range(make: str, model: str, fuel_type: str = None) -> Optional[int]:
+    """
+    Query RDW Open Data API for WLTP range based on make/model
+    
+    This function queries Dutch vehicle registration data to find WLTP ranges
+    for electric vehicles. It searches for registered vehicles matching the
+    make/model and extracts the official WLTP range.
+    
+    Args:
+        make: Vehicle make (e.g., "Volvo", "Tesla")
+        model: Vehicle model (e.g., "XC40", "Model 3")
+        fuel_type: Optional fuel type to determine if PHEV
+        
+    Returns:
+        WLTP range in km or None if not found
+    """
+    if not make or not model:
+        return None
+    
+    try:
+        # Determine if this is a PHEV
+        is_phev = fuel_type and fuel_type.lower() in ['phev', 'plug-in hybrid', 'hybrid']
+        
+        # Build search query for RDW vehicle database
+        # Search for vehicles matching make and model name
+        model_search = model.split()[0]  # Use first word of model for broader matching
+        
+        # Query main vehicle dataset to find matching vehicles
+        base_url = "https://opendata.rdw.nl/resource/m9d7-ebf2.json"
+        params = {
+            "$where": f"merk='{make.upper()}' AND handelsbenaming LIKE '%{model_search.upper()}%'",
+            "$select": "kenteken",
+            "$limit": 10,
+            "$order": "datum_eerste_toelating DESC"
+        }
+        
+        logger.debug(f"Querying RDW for {make} {model}...")
+        response = requests.get(base_url, params=params, timeout=10)
+        
+        if response.status_code != 200:
+            logger.debug(f"RDW query failed with status {response.status_code}")
+            return None
+        
+        vehicles = response.json()
+        if not vehicles:
+            logger.debug(f"No vehicles found in RDW for {make} {model}")
+            return None
+        
+        # Query fuel/range data for these vehicles
+        ranges = []
+        fuel_url = "https://opendata.rdw.nl/resource/8ys7-d773.json"
+        
+        for vehicle in vehicles[:5]:  # Check first 5 matches
+            kenteken = vehicle.get('kenteken')
+            if not kenteken:
+                continue
+            
+            fuel_params = {"kenteken": kenteken}
+            fuel_response = requests.get(fuel_url, params=fuel_params, timeout=10)
+            
+            if fuel_response.status_code == 200:
+                fuel_data = fuel_response.json()
+                
+                for record in fuel_data:
+                    # Check for electric vehicle
+                    if record.get('brandstof_omschrijving') == 'Elektriciteit':
+                        if is_phev:
+                            # For PHEV, use external charging range
+                            range_val = record.get('actie_radius_extern_opladen_wltp')
+                        else:
+                            # For full electric, use pure electric range
+                            range_val = record.get('actie_radius_enkel_elektrisch_wltp')
+                        
+                        if range_val:
+                            try:
+                                range_km = int(range_val)
+                                if range_km > 50:  # Sanity check: ignore unrealistic values
+                                    ranges.append(range_km)
+                                    logger.debug(f"Found RDW WLTP range for {make} {model}: {range_km} km (kenteken: {kenteken})")
+                            except (ValueError, TypeError):
+                                continue
+        
+        if ranges:
+            # Return the most common range (mode), or median if all different
+            from collections import Counter
+            range_counts = Counter(ranges)
+            most_common_range = range_counts.most_common(1)[0][0]
+            logger.info(f"✓ RDW API: Found WLTP range for {make} {model}: {most_common_range} km")
+            return most_common_range
+        
+    except requests.exceptions.Timeout:
+        logger.debug(f"RDW API timeout for {make} {model}")
+    except Exception as e:
+        logger.debug(f"RDW API error for {make} {model}: {e}")
+    
+    return None
+
+
+def get_wltp_range(make: str, model: str, fuel_type: str = None, ad_listed_range_km: Optional[int] = None) -> Optional[int]:
+    """
+    Get WLTP range estimate for a vehicle based on make, model, and extracted battery size
+    
+    Strategy: 
+    1. Check manual YAML file first (fast, curated data)
+    2. If not found, query RDW Open Data API (free, official Dutch vehicle data)
+    
+    Args:
+        make: Vehicle make (e.g., "Volkswagen", "Tesla")
+        model: Vehicle model (e.g., "ID.4 Pro 77 kWh", "Model 3 Long Range")
+        fuel_type: Optional fuel type to determine if it's a PHEV
+        ad_listed_range_km: Optional advertised range to help select correct battery variant
+        
+    Returns:
+        Estimated WLTP range in km or None if not found
+    """
+    if not make or not model:
+        return None
+    
+    wltp_data = _load_wltp_ranges()
+    if not wltp_data:
+        return None
+    
+    # Normalize make name (case-insensitive lookup)
+    make_normalized = make.strip()
+    model_lower = model.lower()
+    
+    # Check if this is a PHEV request
+    is_phev = fuel_type and fuel_type.lower() in ['phev', 'plug-in hybrid', 'hybrid']
+    
+    if is_phev:
+        # Look in PHEV section ONLY
+        phev_data = wltp_data.get('PHEV', {})
+        
+        # Case-insensitive make lookup
+        make_data = None
+        for phev_make, phev_models in phev_data.items():
+            if phev_make.lower() == make_normalized.lower():
+                make_data = phev_models
+                break
+        
+        if make_data:
+            # Try to match model name
+            for phev_model, range_km in make_data.items():
+                phev_model_lower = phev_model.lower()
+                # Check if model keywords match
+                if phev_model_lower in model_lower or model_lower in phev_model_lower:
+                    logger.debug(f"Found PHEV WLTP range for {make} {model}: {range_km} km")
+                    return range_km
+                
+                # Check for partial matches (e.g., "Leon" matches "Leon e-Hybrid")
+                model_words = set(model_lower.split())
+                phev_words = set(phev_model_lower.split())
+                if len(model_words & phev_words) >= 1:  # At least one word matches
+                    logger.debug(f"Found PHEV WLTP range for {make} {model} (partial match): {range_km} km")
+                    return range_km
+        
+        # PHEV not found in PHEV section - return None to prevent matching EV data
+        logger.debug(f"No PHEV WLTP range found for {make} {model}")
+        return None
+    
+    # Look in regular EV section (case-insensitive)
+    make_data = None
+    for ev_make, ev_models in wltp_data.items():
+        if ev_make.lower() == make_normalized.lower() and ev_make != 'PHEV':
+            make_data = ev_models
+            break
+    
+    if not make_data:
+        return None
+    
+    # Try to find matching model
+    best_match = None
+    best_match_score = 0
+    
+    for model_pattern, battery_data in make_data.items():
+        # Check if model pattern matches
+        model_pattern_lower = model_pattern.lower()
+        
+        # Score the match based on how many words overlap
+        pattern_words = set(model_pattern_lower.split())
+        model_words = set(model_lower.split())
+        overlap = pattern_words & model_words
+        match_score = len(overlap)
+        
+        # Also give points for substring matching
+        if model_pattern_lower in model_lower or model_lower in model_pattern_lower:
+            match_score += 5
+        
+        if match_score > best_match_score:
+            best_match_score = match_score
+            best_match = (model_pattern, battery_data)
+    
+    if best_match and best_match_score > 0:
+        model_pattern, battery_data = best_match
+        
+        if not isinstance(battery_data, dict):
+            # Direct range value (no battery variants)
+            logger.debug(f"Found WLTP range for {make} {model}: {battery_data} km")
+            return battery_data
+        
+        # Extract battery size from model string
+        battery_size = extract_battery_size(model)
+        
+        if battery_size:
+            # Look up range by battery size
+            range_km = battery_data.get(battery_size)
+            if range_km:
+                logger.debug(f"Found WLTP range for {make} {model} ({battery_size} kWh): {range_km} km")
+                return range_km
+        
+        # Fallback: try to match variant names in the model string
+        # For example, "Long Range" → look for larger battery, "Standard Range" → smaller battery
+        if 'long range' in model_lower or 'extended' in model_lower:
+            # Get the largest battery size
+            if battery_data:
+                max_battery = max(battery_data.keys(), key=lambda x: int(x))
+                range_km = battery_data[max_battery]
+                logger.debug(f"Using WLTP range for {make} {model} (Long Range variant, {max_battery} kWh): {range_km} km")
+                return range_km
+        elif 'standard' in model_lower or 'base' in model_lower:
+            # Get the smallest battery size
+            if battery_data:
+                min_battery = min(battery_data.keys(), key=lambda x: int(x))
+                range_km = battery_data[min_battery]
+                logger.debug(f"Using WLTP range for {make} {model} (Standard variant, {min_battery} kWh): {range_km} km")
+                return range_km
+        else:
+            # If we can't determine variant, try using ad_listed_range_km for better matching
+            if battery_data:
+                if ad_listed_range_km:
+                    # Use ad_listed_range to find the closest WLTP variant
+                    # Two strategies:
+                    # 1. If ad_range is 90-110% of any WLTP value, seller likely listed WLTP spec directly
+                    # 2. Otherwise, treat as real-world range (expect 40-85% of WLTP)
+                    
+                    best_variant = None
+                    best_score = float('inf')
+                    
+                    # Strategy 1: Check if ad_range matches any WLTP value directly (±10%)
+                    for battery_kwh, wltp_range in battery_data.items():
+                        ratio = ad_listed_range_km / wltp_range if wltp_range > 0 else 0
+                        if 0.90 <= ratio <= 1.10:
+                            # Direct WLTP match - return immediately
+                            logger.debug(f"Ad-listed range matches WLTP spec for {make} {model}: "
+                                       f"ad={ad_listed_range_km}km ≈ WLTP={wltp_range}km ({battery_kwh}kWh)")
+                            return wltp_range
+                    
+                    # Strategy 2: Treat as real-world range, find best efficiency match
+                    for battery_kwh, wltp_range in battery_data.items():
+                        efficiency_ratio = ad_listed_range_km / wltp_range if wltp_range > 0 else 0
+                        
+                        # Only consider realistic efficiency ratios (40-85%)
+                        if 0.40 <= efficiency_ratio <= 0.85:
+                            # Calculate distance from ideal efficiency (60%)
+                            ideal_efficiency = 0.60
+                            distance_from_ideal = abs(efficiency_ratio - ideal_efficiency)
+                            
+                            if distance_from_ideal < best_score:
+                                best_score = distance_from_ideal
+                                best_variant = (battery_kwh, wltp_range, efficiency_ratio)
+                    
+                    if best_variant:
+                        chosen_battery, fallback_range, efficiency = best_variant
+                        logger.debug(f"Using ad-listed range-based WLTP for {make} {model}: "
+                                   f"ad={ad_listed_range_km}km → WLTP={fallback_range}km "
+                                   f"({chosen_battery}kWh, {efficiency:.1%} efficiency)")
+                        return fallback_range
+                
+                # Original fallback: use the most common/largest battery
+                # (usually the mid to upper range model, not the smallest)
+                sorted_batteries = sorted(battery_data.keys(), key=lambda x: int(x))
+                if len(sorted_batteries) == 1:
+                    chosen_battery = sorted_batteries[0]
+                elif len(sorted_batteries) == 2:
+                    # Pick the larger of two options (more common)
+                    chosen_battery = sorted_batteries[1]
+                else:
+                    # Pick the second-largest for 3+ options (most common mid-high trim)
+                    chosen_battery = sorted_batteries[-2]
+                
+                fallback_range = battery_data[chosen_battery]
+                logger.debug(f"Using fallback WLTP range for {make} {model} ({chosen_battery} kWh variant): {fallback_range} km")
+                return fallback_range
+    
+    # YAML lookup failed - RDW API fallback is disabled for performance
+    # The RDW API calls can take 1-2 seconds each with 10s timeouts
+    # For ~150 cars on the top matches page, this causes 20-30 second load times
+    logger.debug(f"WLTP not found in YAML for {make} {model} (RDW API fallback disabled for performance)")
+    
+    return None
+
+
+def calculate_towing_range(car, ev_db_range=None) -> Optional[dict]:
+    """
+    Calculate estimated highway towing range for a tent trailer (750-1000kg)
+    
+    Args:
+        car: Car object with range information
+        ev_db_range: Optional pre-fetched EV-Database range data
+        
+    Returns:
+        Dictionary with:
+        - estimated_range_km: Estimated towing range in km
+        - source: Which data source was used ('ev_database', 'ad_listed', 'wltp')
+        - base_range: The base range value used for calculation
+        - reduction_percent: Percentage reduction applied
+        Returns None if no range data available
+    """
+    # Priority 1: EV-Database highway range (most accurate for highway towing)
+    if ev_db_range and ev_db_range.get('highway_mild'):
+        base_range = ev_db_range['highway_mild']
+        reduction = 0.40  # 40% reduction for highway towing
+        return {
+            'estimated_range_km': int(base_range * (1 - reduction)),
+            'source': 'EV-Database highway range',
+            'base_range': int(base_range),
+            'reduction_percent': int(reduction * 100)
+        }
+    
+    # Priority 2: Listed in ad range (usually combined/WLTP, so more conservative reduction)
+    ad_range = getattr(car, 'ad_listed_range_km', None) or getattr(car, 'electric_range_km', None)
+    if ad_range:
+        reduction = 0.45  # 45% reduction (ad ranges are often optimistic)
+        return {
+            'estimated_range_km': int(ad_range * (1 - reduction)),
+            'source': 'Listed in ad',
+            'base_range': int(ad_range),
+            'reduction_percent': int(reduction * 100)
+        }
+    
+    # Priority 3: WLTP range (most optimistic, so most conservative reduction)
+    wltp_range = getattr(car, 'wltp_reference_range_km', None) or getattr(car, 'wltp_range', None)
+    if wltp_range:
+        reduction = 0.50  # 50% reduction (WLTP is very optimistic)
+        return {
+            'estimated_range_km': int(wltp_range * (1 - reduction)),
+            'source': 'WLTP range',
+            'base_range': int(wltp_range),
+            'reduction_percent': int(reduction * 100)
+        }
+    
+    return None
+
+
+def find_duplicate_cars(car, db_session, threshold_km=5000, price_diff_pct=10):
+    """
+    Find potential duplicate listings of the same car
+    
+    A car is considered a potential duplicate if it matches:
+    - Same make and model
+    - Same year
+    - Similar mileage (within threshold_km)
+    - Similar price (within price_diff_pct percentage)
+    - Different external_id (to exclude the same listing)
+    - Is currently available (no point showing unavailable duplicates)
+    
+    Args:
+        car: Car object to find duplicates for
+        db_session: Database session
+        threshold_km: Maximum mileage difference in km (default 5000)
+        price_diff_pct: Maximum price difference as percentage (default 10%)
+        
+    Returns:
+        List of potential duplicate Car objects
+    """
+    from models.database import Car
+    
+    if not car:
+        return []
+    
+    # Calculate price range
+    price_min = car.price * (1 - price_diff_pct / 100)
+    price_max = car.price * (1 + price_diff_pct / 100)
+    
+    # Calculate mileage range
+    mileage_min = max(0, car.mileage_km - threshold_km)
+    mileage_max = car.mileage_km + threshold_km
+    
+    # Query for potential duplicates
+    duplicates = db_session.query(Car).filter(
+        Car.make == car.make,
+        Car.model == car.model,
+        Car.year == car.year,
+        Car.mileage_km >= mileage_min,
+        Car.mileage_km <= mileage_max,
+        Car.price >= price_min,
+        Car.price <= price_max,
+        Car.external_id != car.external_id,  # Different listing
+        Car.is_available == True  # Only show available duplicates
+    ).all()
+    
+    return duplicates
+

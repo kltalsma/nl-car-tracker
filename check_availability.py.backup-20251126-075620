@@ -256,17 +256,11 @@ class AvailabilityChecker:
             True if available, False if not available, None if couldn't determine
         """
         try:
-            # Validate listing_url before attempting to load
-            if not car.listing_url or car.listing_url.strip() in ['', '...', 'None']:
-                logger.warning(f"  ⚠️  SKIPPING: Car has invalid or missing listing_url: '{car.listing_url}'")
-                return None
-            
             # Initialize driver if not already done
             if not self.driver:
                 self._init_driver()
             
             # Get the page
-            logger.debug(f"  Loading URL: {car.listing_url}")
             self.driver.get(car.listing_url)
             time.sleep(2)  # Wait for page to load
             
@@ -491,7 +485,6 @@ class AvailabilityChecker:
             
             if not cars:
                 logger.info("No cars match the filters")
-                return {"cars_checked": 0, "cars_marked_unavailable": 0, "still_available": 0, "errors": 0}
                 return
             
             logger.info(f"\n{'='*60}")
@@ -552,14 +545,6 @@ class AvailabilityChecker:
             logger.info(f"Alternative cars found: {total_alternatives_found}")
             logger.info(f"Errors: {errors}")
             logger.info(f"{'='*60}\n")
-
-            # Return stats for the caller
-            return {
-                'cars_checked': checked,
-                'cars_marked_unavailable': marked_unavailable,
-                'still_available': still_available,
-                'errors': errors
-            }
             
         except Exception as e:
             session.rollback()
