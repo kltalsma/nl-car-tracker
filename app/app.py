@@ -113,7 +113,9 @@ def initialize_current_car_from_config():
                 mileage_km=current_car_config.get('mileage_km'),
                 initial_purchase_price=current_car_config.get('initial_purchase_price'),
                 purchase_date=purchase_date,
-                average_km_per_year=current_car_config.get('average_km_per_year')
+                average_km_per_year=current_car_config.get('average_km_per_year'),
+                purchase_mileage_km=current_car_config.get('purchase_mileage_km'),
+                estimated_new_price=current_car_config.get('estimated_new_price')
             )
             session.add(current_car)
             session.commit()
@@ -161,6 +163,16 @@ def initialize_current_car_from_config():
                 existing_car.average_km_per_year = current_car_config.get('average_km_per_year')
                 updated = True
             
+            
+            # Update purchase_mileage_km if provided
+            if current_car_config.get("purchase_mileage_km") and existing_car.purchase_mileage_km != current_car_config.get("purchase_mileage_km"):
+                existing_car.purchase_mileage_km = current_car_config.get("purchase_mileage_km")
+                updated = True
+            
+            # Update estimated_new_price if provided
+            if current_car_config.get("estimated_new_price") and existing_car.estimated_new_price != current_car_config.get("estimated_new_price"):
+                existing_car.estimated_new_price = current_car_config.get("estimated_new_price")
+                updated = True
             if updated:
                 session.commit()
                 logger.info(f"Updated current car from config: {license_plate}")
@@ -1711,33 +1723,34 @@ def analytics():
             Car.price < max_p
         ).count()
         
-        # Preferred cars in this range - ONLY count specific preferred models
-        model_conditions = [Car.model.ilike(f'%{model}%') for model in preferred_models]
-        preferred_count = session.query(Car).filter(
+        # Cars matching specifications in this range (has all required features)
+        matching_specs_count = session.query(Car).filter(
             Car.is_available == True,
             Car.price >= min_p,
             Car.price < max_p,
-            or_(*model_conditions)  # Only match the specific models
+            Car.has_all_required_features == True
         ).count()
         
         price_distribution.append({
             'range': f"€{min_p//1000}k-{max_p//1000}k",
             'count': count
         })
-        preferred_counts.append(preferred_count)
+        preferred_counts.append(matching_specs_count)
     
-    # Find the range with most preferred cars
+    # Find the range with most cars matching specifications
     # Only highlight if there's a clear winner (no ties)
     max_preferred_count = max(preferred_counts) if preferred_counts else 0
     count_of_max = preferred_counts.count(max_preferred_count) if max_preferred_count > 0 else 0
     
-    # Only set preferred_range_index if there's a unique maximum (not a tie)
+    # Only set preferred_range_indices if there's a unique maximum (not a tie)
     if max_preferred_count > 0 and count_of_max == 1:
         preferred_range_index = preferred_counts.index(max_preferred_count)
+        preferred_range_indices = [preferred_range_index]  # Pass as list for template
     else:
         preferred_range_index = -1  # Don't highlight any range if there's a tie
+        preferred_range_indices = []  # Empty list means no highlighting
     
-    logger.info(f"Preferred counts by range: {preferred_counts}, max={max_preferred_count}, ties={count_of_max}, index={preferred_range_index}")
+    logger.info(f"Cars matching specs by range: {preferred_counts}, max={max_preferred_count}, ties={count_of_max}, index={preferred_range_index}")
     
     
     # Cars by source
@@ -1872,7 +1885,7 @@ def analytics():
     logger.info(f"Analytics - Passing avg_features={avg_features}, critical_features={len(config.get('critical_features', []))}")
     return render_template('analytics.html',
                          price_distribution=price_distribution,
-                         preferred_range_index=preferred_range_index,
+                         preferred_range_indices=preferred_range_indices,
                          sources=sources,
                          vehicle_types=vehicle_types,
                          recent_scrapes=recent_scrapes,
@@ -3159,7 +3172,9 @@ def calculate_depreciation():
             'purchase_date': current_car.purchase_date,
             'mileage_km': current_car.mileage_km,
             'average_km_per_year': current_car.average_km_per_year,
-            'year': current_car.year  # Add manufacture year for accurate age calculation
+            'year': current_car.year,  # Add manufacture year for accurate age calculation
+            'purchase_mileage_km': current_car.purchase_mileage_km,
+            'estimated_new_price': current_car.estimated_new_price
         }
         
         # Calculate depreciation
@@ -3179,6 +3194,7 @@ def calculate_depreciation():
                 'year': current_car.year,
                 'license_plate': current_car.license_plate,
                 'purchase_price': current_car.initial_purchase_price,
+                'estimated_new_price': current_car.estimated_new_price or current_car.initial_purchase_price,
                 'purchase_date': current_car.purchase_date.isoformat() if current_car.purchase_date else None,
                 'current_mileage': current_car.mileage_km
             },
