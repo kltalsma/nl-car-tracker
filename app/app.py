@@ -3572,6 +3572,45 @@ def import_sql_dump(token):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+
+@app.route("/admin/reset-database/<token>", methods=["POST"])
+def reset_database(token):
+    """Reset database - delete all tables"""
+    import os
+    import sqlite3
+    
+    # Check token
+    valid_token = os.environ.get("INIT_DB_TOKEN", "init-railway-db-2024")
+    if token != valid_token:
+        return jsonify({"status": "error", "message": "Invalid token"}), 403
+    
+    try:
+        # Connect directly to SQLite
+        db_path = config["database"]["path"]
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Get all tables
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = cursor.fetchall()
+        
+        # Drop all tables
+        for table in tables:
+            cursor.execute(f"DROP TABLE IF EXISTS {table[0]}")
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Dropped {len(tables)} tables",
+            "tables": [t[0] for t in tables]
+        })
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 if __name__ == '__main__':
     # Run Flask development server with threading enabled
     # Threading is required to handle concurrent requests when scrapers are running
