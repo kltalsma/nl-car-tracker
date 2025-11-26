@@ -134,6 +134,7 @@ vehicle_classification:
     - Mokka
     - Corsa-e
     - Corsa-e GS
+    - Combo
     Renault:
     - Megane E-Tech
     - Kangoo
@@ -297,7 +298,7 @@ critical_features:
 - Adaptive Cruise Control
 - Park Assist
 - Achteruitrijcamera
-- "360\xB0 camera"
+- 360° camera
 - Dodehoekdetectie
 - Botswaarschuwing
 - Parkeerhulp automatisch
