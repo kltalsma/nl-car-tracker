@@ -3233,11 +3233,207 @@ def get_scraper_service_status():
                 # Check if container exists but is stopped
                 stopped_result = subprocess.run(
                     ['docker', 'ps', '-a', '--filter', 'name=nl-car-tracker-scraper', '--format', '{{.Status}}'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                
+                if stopped_result.returncode == 0 and stopped_result.stdout.strip():
+                    return jsonify({
+                        'status': 'stopped',
+                        'message': 'Scraper service is stopped',
+                        'details': stopped_result.stdout.strip()
+                    })
+                else:
+                    return jsonify({
+                        'status': 'not_found',
+                        'message': 'Scraper container not found'
+                    })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to check container status'
+            }), 500
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            'status': 'error',
+            'message': 'Timeout checking container status'
+        }), 500
+    except FileNotFoundError:
+        return jsonify({
+            'status': 'error',
+            'message': 'Docker command not found. Is Docker installed?'
+        }), 500
+    except Exception as e:
+        logger.error(f"Error checking scraper service status: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
+@app.route('/api/scraper-service/control', methods=['POST'])
+def control_scraper_service():
+    """Start or stop the scraper Docker container"""
+    try:
+        import subprocess
+        import os
+        
+        data = request.get_json()
+        action = data.get('action')
+        
+        if action not in ['start', 'stop']:
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid action. Use "start" or "stop".'
+            }), 400
+        
+        container_name = 'nl-car-tracker-scraper'
+        
+        if action == 'start':
+            try:
+                logger.info(f"Start action received for container: {container_name}")
+                
+                # Update restart policy first
+                update_result = subprocess.run(
+                    ['docker', 'update', '--restart=unless-stopped', container_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                logger.info(f"Update policy result: {update_result.returncode}")
+                
+                if update_result.returncode != 0:
+                    logger.error(f"Failed to update restart policy: {update_result.stderr}")
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'Failed to update restart policy: {update_result.stderr}'
+                    }), 500
+                
+                # Start the container
+                start_result = subprocess.run(
+                    ['docker', 'start', container_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                logger.info(f"Start container result: {start_result.returncode}")
+                
+                if start_result.returncode == 0:
+                    logger.info("Scraper service started successfully")
+                    return jsonify({
+                        'status': 'success',
+                        'message': 'Scraper service started successfully'
+                    })
+                else:
+                    logger.error(f"Failed to start container: {start_result.stderr}")
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'Failed to start container: {start_result.stderr}'
+                    }), 500
+            except Exception as e:
+                logger.error(f"Error starting scraper service: {e}")
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Failed to start: {str(e)}'
+                }), 500
+                
+        elif action == 'stop':
+            try:
+                logger.info(f"Stop action received for container: {container_name}")
+                
+                # Update restart policy to prevent auto-restart
+                update_result = subprocess.run(
+                    ['docker', 'update', '--restart=no', container_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                logger.info(f"Update policy (stop) result: {update_result.returncode}")
+                
+                if update_result.returncode != 0:
+                    logger.error(f"Failed to update restart policy: {update_result.stderr}")
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'Failed to update restart policy: {update_result.stderr}'
+                    }), 500
+                
+                # Stop the scraper container asynchronously
+                # Use Popen to avoid blocking - docker stop can take 20-30 seconds due to graceful shutdown
+                subprocess.Popen(
+                    ['docker', 'stop', container_name],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                
+                logger.info("Scraper service stop initiated (async)")
+                return jsonify({
+                    'status': 'success',
+                    'message': 'Scraper service stop initiated (container will stop gracefully in ~20-30 seconds)'
+                })
+            except Exception as e:
+                logger.error(f"Error stopping scraper service: {e}")
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Failed to stop: {str(e)}'
+                }), 500
+                
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            'status': 'error',
+            'message': f'Timeout {action}ing scraper service'
+        }), 500
+    except FileNotFoundError:
+        return jsonify({
+            'status': 'error',
+            'message': 'docker-compose command not found. Is Docker Compose installed?'
+        }), 500
+    except Exception as e:
+        logger.error(f"Error controlling scraper service: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
+@app.template_filter('format_price')
+def format_price(price):
+    """Template filter for formatting prices"""
+    if price is None:
+        return "N/A"
+    return f"€{price:,.0f}".replace(',', '.')
+
+
+@app.template_filter('format_mileage')
+def format_mileage(mileage):
+    """Template filter for formatting mileage"""
+    if mileage is None:
+        return "N/A"
+    return f"{mileage:,} km".replace(',', '.')
+
+
+@app.template_filter('format_distance')
+def format_distance(distance):
+    """Template filter for formatting distance"""
+    if distance is None:
+        return "N/A"
+    return f"{distance:.1f} km"
+
+
+@app.template_filter('format_datetime')
+def format_datetime(dt):
+    """Template filter for formatting datetime"""
+    if dt is None:
+        return "N/A"
+    return dt.strftime("%Y-%m-%d %H:%M")
+
 
 if __name__ == '__main__':
     # Run Flask development server with threading enabled
     # Threading is required to handle concurrent requests when scrapers are running
     # Use PORT env var for Railway, fallback to config for local development
+    import os
     port = int(os.environ.get('PORT', config['dashboard']['port']))
     app.run(
         host='0.0.0.0',
