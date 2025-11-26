@@ -62,3 +62,9 @@ backups/
 # Backup files
 *.bak
 *~
+# Backup files
+*.backup
+*.backup-*
+
+# Temporary directory
+tmp/

@@ -1,0 +1,32 @@
+# Ignore local development files
+.git
+.gitignore
+*.pyc
+__pycache__/
+*.log
+.DS_Store
+
+# Ignore local data and logs
+data/
+logs/
+tmp/
+
+# Ignore Docker files (using Railway-specific Dockerfile)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Ignore local scripts
+start.sh
+stop.sh
+start-local.sh
+stop-local.sh
+
+# Ignore documentation
+README.md
+*.md
+
+# Ignore environment files
+.env
+.venv/
+venv/

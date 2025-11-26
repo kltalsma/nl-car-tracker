@@ -7,7 +7,9 @@ import os
 # Add parent directory to path to import models
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask_login import login_required, logout_user, login_user
+from auth import init_auth, check_credentials, User
 from models.database import Database, Car, PriceHistory, ScraperLog
 from sqlalchemy import desc, func, or_, case
 from datetime import datetime, timedelta
@@ -33,6 +35,9 @@ with open(config_path, 'r') as f:
 
 # Initialize database
 db = Database(config['database']['path'])
+
+# Initialize authentication
+login_manager = init_auth(app)
 
 # Get latest trade-in value for net cost calculation
 def get_latest_trade_in_value():
@@ -113,7 +118,9 @@ def initialize_current_car_from_config():
                 mileage_km=current_car_config.get('mileage_km'),
                 initial_purchase_price=current_car_config.get('initial_purchase_price'),
                 purchase_date=purchase_date,
-                average_km_per_year=current_car_config.get('average_km_per_year')
+                average_km_per_year=current_car_config.get('average_km_per_year'),
+                purchase_mileage_km=current_car_config.get('purchase_mileage_km'),
+                estimated_new_price=current_car_config.get('estimated_new_price')
             )
             session.add(current_car)
             session.commit()
@@ -161,6 +168,16 @@ def initialize_current_car_from_config():
                 existing_car.average_km_per_year = current_car_config.get('average_km_per_year')
                 updated = True
             
+            
+            # Update purchase_mileage_km if provided
+            if current_car_config.get("purchase_mileage_km") and existing_car.purchase_mileage_km != current_car_config.get("purchase_mileage_km"):
+                existing_car.purchase_mileage_km = current_car_config.get("purchase_mileage_km")
+                updated = True
+            
+            # Update estimated_new_price if provided
+            if current_car_config.get("estimated_new_price") and existing_car.estimated_new_price != current_car_config.get("estimated_new_price"):
+                existing_car.estimated_new_price = current_car_config.get("estimated_new_price")
+                updated = True
             if updated:
                 session.commit()
                 logger.info(f"Updated current car from config: {license_plate}")
@@ -930,7 +947,32 @@ def check_critical_features(car, config):
     return results
 
 
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+        
+        if check_credentials(username, password):
+            user = User(username)
+            login_user(user)
+            next_page = request.args.get("next")
+            return redirect(next_page or url_for("index"))
+        else:
+            flash("Invalid username or password")
+    
+    return render_template("login.html")
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("login"))
+
+@login_required
 @app.route('/')
+@login_required
 def index():
     """Home page with car listings"""
     session = db.get_session()
@@ -1102,6 +1144,7 @@ def index():
 
 
 @app.route('/car/<int:car_id>')
+@login_required
 def car_detail(car_id):
     """Detailed view of a single car"""
     session = db.get_session()
@@ -1155,6 +1198,7 @@ def car_detail(car_id):
 
 
 @app.route('/my-matches')
+@login_required
 def my_matches():
     """Show cars matching user's specific requirements with clear indicators"""
     session = db.get_session()
@@ -1408,6 +1452,7 @@ def my_matches():
 
 
 @app.route('/top-matches')
+@login_required
 def top_matches():
     """Show top 3 Full Electric and top 3 PHEV/Hybrid cars based on smart scoring (price, odometer, range, age)"""
     print("=" * 80, flush=True)
@@ -1683,6 +1728,7 @@ def top_matches():
 
 
 @app.route('/analytics')
+@login_required
 def analytics():
     """Analytics and charts page"""
     session = db.get_session()
@@ -1711,33 +1757,34 @@ def analytics():
             Car.price < max_p
         ).count()
         
-        # Preferred cars in this range - ONLY count specific preferred models
-        model_conditions = [Car.model.ilike(f'%{model}%') for model in preferred_models]
-        preferred_count = session.query(Car).filter(
+        # Cars matching specifications in this range (has all required features)
+        matching_specs_count = session.query(Car).filter(
             Car.is_available == True,
             Car.price >= min_p,
             Car.price < max_p,
-            or_(*model_conditions)  # Only match the specific models
+            Car.has_all_required_features == True
         ).count()
         
         price_distribution.append({
             'range': f"€{min_p//1000}k-{max_p//1000}k",
             'count': count
         })
-        preferred_counts.append(preferred_count)
+        preferred_counts.append(matching_specs_count)
     
-    # Find the range with most preferred cars
+    # Find the range with most cars matching specifications
     # Only highlight if there's a clear winner (no ties)
     max_preferred_count = max(preferred_counts) if preferred_counts else 0
     count_of_max = preferred_counts.count(max_preferred_count) if max_preferred_count > 0 else 0
     
-    # Only set preferred_range_index if there's a unique maximum (not a tie)
+    # Only set preferred_range_indices if there's a unique maximum (not a tie)
     if max_preferred_count > 0 and count_of_max == 1:
         preferred_range_index = preferred_counts.index(max_preferred_count)
+        preferred_range_indices = [preferred_range_index]  # Pass as list for template
     else:
         preferred_range_index = -1  # Don't highlight any range if there's a tie
+        preferred_range_indices = []  # Empty list means no highlighting
     
-    logger.info(f"Preferred counts by range: {preferred_counts}, max={max_preferred_count}, ties={count_of_max}, index={preferred_range_index}")
+    logger.info(f"Cars matching specs by range: {preferred_counts}, max={max_preferred_count}, ties={count_of_max}, index={preferred_range_index}")
     
     
     # Cars by source
@@ -1872,7 +1919,7 @@ def analytics():
     logger.info(f"Analytics - Passing avg_features={avg_features}, critical_features={len(config.get('critical_features', []))}")
     return render_template('analytics.html',
                          price_distribution=price_distribution,
-                         preferred_range_index=preferred_range_index,
+                         preferred_range_indices=preferred_range_indices,
                          sources=sources,
                          vehicle_types=vehicle_types,
                          recent_scrapes=recent_scrapes,
@@ -1889,6 +1936,7 @@ def analytics():
 
 
 @app.route('/api/cars')
+@login_required
 def api_cars():
     """API endpoint for car listings (JSON)"""
     session = db.get_session()
@@ -1923,6 +1971,7 @@ def api_cars():
 
 
 @app.route('/api/stats')
+@login_required
 def api_stats():
     """API endpoint for statistics (JSON)"""
     session = db.get_session()
@@ -1962,6 +2011,7 @@ def api_stats():
 
 
 @app.route('/unavailable-cars')
+@login_required
 def unavailable_cars():
     """Show all unavailable cars with filter for preferred ones"""
     session = db.get_session()
@@ -2001,6 +2051,7 @@ def unavailable_cars():
 
 
 @app.route('/admin')
+@login_required
 def admin():
     """Admin panel for scraper management"""
     session = db.get_session()
@@ -2069,6 +2120,7 @@ def admin():
 
 
 @app.route('/api/trigger-scrape', methods=['POST'])
+@login_required
 def trigger_scrape():
     """Manually trigger a scraper run"""
     try:
@@ -2130,6 +2182,7 @@ def trigger_scrape():
 
 
 @app.route('/api/trigger-availability-check', methods=['POST'])
+@login_required
 def trigger_availability_check():
     """Manually trigger availability check"""
     try:
@@ -2164,6 +2217,7 @@ def trigger_availability_check():
 
 
 @app.route('/api/scraper-logs', methods=['GET'])
+@login_required
 def get_scraper_logs():
     """Get recent scraper log entries"""
     try:
@@ -2230,6 +2284,7 @@ def get_scraper_logs():
 
 
 @app.route('/api/mark-available/<int:car_id>', methods=['POST'])
+@login_required
 def mark_car_available(car_id):
     """
     Manually mark a car as available again
@@ -2288,6 +2343,7 @@ def mark_car_available(car_id):
 
 
 @app.route('/api/exclusions', methods=['GET'])
+@login_required
 def get_exclusions():
     """Get all excluded models from config"""
     try:
@@ -2314,6 +2370,7 @@ def get_exclusions():
 
 
 @app.route('/api/exclusions', methods=['POST'])
+@login_required
 def add_exclusion():
     """Add a new exclusion to config"""
     try:
@@ -2373,6 +2430,7 @@ def add_exclusion():
 
 
 @app.route('/api/exclusions/<path:exclusion_id>', methods=['DELETE'])
+@login_required
 def delete_exclusion(exclusion_id):
     """Delete an exclusion from config"""
     try:
@@ -2424,6 +2482,7 @@ def delete_exclusion(exclusion_id):
 
 
 @app.route('/api/availability-history')
+@login_required
 def api_availability_history():
     """API endpoint for availability check history"""
     try:
@@ -2470,6 +2529,7 @@ def api_availability_history():
 
 
 @app.route('/api/scraper-statistics')
+@login_required
 def api_scraper_statistics():
     """API endpoint for scraper statistics per website"""
     try:
@@ -2539,6 +2599,7 @@ def api_scraper_statistics():
 
 
 @app.route('/api/scraper-trends')
+@login_required
 def get_scraper_trends():
     """Get scraper performance trends over the last 30 days"""
     try:
@@ -2629,6 +2690,7 @@ def get_scraper_trends():
 
 
 @app.route('/api/scheduler-status')
+@login_required
 def get_scheduler_status():
     """Get current scheduler configuration and status"""
     try:
@@ -2698,6 +2760,7 @@ def get_scheduler_status():
 
 
 @app.route('/api/scheduler-update', methods=['POST'])
+@login_required
 def update_scheduler_config():
     """Update scheduler configuration in config.yaml"""
     try:
@@ -2770,6 +2833,7 @@ def update_scheduler_config():
 
 
 @app.route('/api/critical-features', methods=['GET'])
+@login_required
 def get_critical_features():
     """Get list of all possible critical features with their enabled status, organized by category"""
     try:
@@ -2853,6 +2917,7 @@ def get_critical_features():
 
 
 @app.route('/api/critical-features/<path:feature_id>', methods=['PUT'])
+@login_required
 def update_critical_feature(feature_id):
     """Enable or disable a critical feature"""
     try:
@@ -2955,6 +3020,7 @@ def update_critical_feature(feature_id):
 
 
 @app.route('/trade-in-value')
+@login_required
 def trade_in_value_page():
     """Page to view and update trade-in value"""
     from models.database import CurrentCar, TradeInValue
@@ -2985,6 +3051,7 @@ def trade_in_value_page():
 
 
 @app.route('/api/trade-in-value', methods=['POST'])
+@login_required
 def update_trade_in_value():
     """API endpoint to manually update trade-in value"""
     try:
@@ -3056,6 +3123,7 @@ def update_trade_in_value():
 
 
 @app.route('/api/update-mileage', methods=['POST'])
+@login_required
 def update_mileage():
     """API endpoint to update only the current car's mileage"""
     try:
@@ -3112,6 +3180,7 @@ def update_mileage():
 
 
 @app.route('/api/calculate-depreciation', methods=['GET'])
+@login_required
 def calculate_depreciation():
     """API endpoint to calculate depreciation for current car"""
     try:
@@ -3159,7 +3228,9 @@ def calculate_depreciation():
             'purchase_date': current_car.purchase_date,
             'mileage_km': current_car.mileage_km,
             'average_km_per_year': current_car.average_km_per_year,
-            'year': current_car.year  # Add manufacture year for accurate age calculation
+            'year': current_car.year,  # Add manufacture year for accurate age calculation
+            'purchase_mileage_km': current_car.purchase_mileage_km,
+            'estimated_new_price': current_car.estimated_new_price
         }
         
         # Calculate depreciation
@@ -3179,6 +3250,7 @@ def calculate_depreciation():
                 'year': current_car.year,
                 'license_plate': current_car.license_plate,
                 'purchase_price': current_car.initial_purchase_price,
+                'estimated_new_price': current_car.estimated_new_price or current_car.initial_purchase_price,
                 'purchase_date': current_car.purchase_date.isoformat() if current_car.purchase_date else None,
                 'current_mileage': current_car.mileage_km
             },
@@ -3191,6 +3263,7 @@ def calculate_depreciation():
 
 
 @app.route('/api/scraper-service/status', methods=['GET'])
+@login_required
 def get_scraper_service_status():
     """Get the status of the scraper Docker container"""
     try:
@@ -3258,6 +3331,7 @@ def get_scraper_service_status():
 
 
 @app.route('/api/scraper-service/control', methods=['POST'])
+@login_required
 def control_scraper_service():
     """Start or stop the scraper Docker container"""
     try:
@@ -3413,6 +3487,130 @@ def format_datetime(dt):
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+@app.route("/admin/init-database", methods=["POST"])
+@login_required
+def init_database():
+    """Initialize database with current car data - one time use"""
+    from models.database import CurrentCar
+    session = db.get_session()
+    
+    try:
+        # Check if already initialized
+        existing_car = session.query(CurrentCar).first()
+        if existing_car:
+            return jsonify({"status": "already_initialized", "message": "Database already has current car data"})
+        
+        # Add current car
+        current_car = CurrentCar(
+            license_plate="SX-515-N",
+            make="OPEL",
+            model="ASTRA SPORTS TOURER+",
+            year=2018,
+            mileage_km=151000,
+            fuel_type="Benzine",
+            body_type="Personenauto",
+            color="GRIJS",
+            rdw_data={},
+            purchase_price=16750.0,
+            purchase_date=datetime(2022, 1, 15),
+            target_sale_value=14000,
+            purchase_mileage_km=74751,
+            estimated_new_price=29838.0
+        )
+        session.add(current_car)
+        session.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Database initialized with current car data",
+            "car": "SX-515-N"
+        })
+            
+    except Exception as e:
+        session.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        session.close()
+
+
+
+@app.route("/admin/import-sql/<token>", methods=["POST"])
+def import_sql_dump(token):
+    """Import SQL dump to populate database"""
+    import os
+    import sqlite3
+    
+    # Check token
+    valid_token = os.environ.get("INIT_DB_TOKEN", "init-railway-db-2024")
+    if token != valid_token:
+        return jsonify({"status": "error", "message": "Invalid token"}), 403
+    
+    try:
+        # Get SQL from request body
+        sql_dump = request.get_data(as_text=True)
+        
+        if not sql_dump:
+            return jsonify({"status": "error", "message": "No SQL data provided"}), 400
+        
+        # Connect directly to SQLite
+        db_path = config["database"]["path"]
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Execute SQL dump
+        cursor.executescript(sql_dump)
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Database imported successfully",
+            "lines": len(sql_dump.split(chr(10)))
+        })
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
+@app.route("/admin/reset-database/<token>", methods=["POST"])
+def reset_database(token):
+    """Reset database - delete all tables"""
+    import os
+    import sqlite3
+    
+    # Check token
+    valid_token = os.environ.get("INIT_DB_TOKEN", "init-railway-db-2024")
+    if token != valid_token:
+        return jsonify({"status": "error", "message": "Invalid token"}), 403
+    
+    try:
+        # Connect directly to SQLite
+        db_path = config["database"]["path"]
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Get all tables
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = cursor.fetchall()
+        
+        # Drop all tables
+        for table in tables:
+            cursor.execute(f"DROP TABLE IF EXISTS {table[0]}")
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Dropped {len(tables)} tables",
+            "tables": [t[0] for t in tables]
+        })
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 if __name__ == '__main__':
     # Run Flask development server with threading enabled
     # Threading is required to handle concurrent requests when scrapers are running
@@ -3422,3 +3620,56 @@ if __name__ == '__main__':
         debug=config['dashboard']['debug'],
         threaded=True
     )
+@app.route("/admin/init-database-token/<token>", methods=["GET"])
+def init_database_with_token(token):
+    """Initialize database with token - no login required"""
+    import os
+    
+    # Check token
+    valid_token = os.environ.get("INIT_DB_TOKEN", "init-railway-db-2024")
+    if token != valid_token:
+        return jsonify({"status": "error", "message": "Invalid token"}), 403
+    
+    from models.database import CurrentCar
+    session = db.get_session()
+    
+    try:
+        # Check if already initialized
+        existing_car = session.query(CurrentCar).first()
+        if existing_car:
+            return jsonify({"status": "already_initialized", "message": "Database already has current car data"})
+        
+        # Add current car
+        current_car = CurrentCar(
+            license_plate="SX-515-N",
+            make="OPEL",
+            model="ASTRA SPORTS TOURER+",
+            year=2018,
+            mileage_km=151000,
+            fuel_type="Benzine",
+            body_type="Personenauto",
+            color="GRIJS",
+            rdw_data={},
+            purchase_price=16750.0,
+            purchase_date=datetime(2022, 1, 15),
+            target_sale_value=14000,
+            purchase_mileage_km=74751,
+            estimated_new_price=29838.0
+        )
+        session.add(current_car)
+        session.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Database initialized with current car data",
+            "car": "SX-515-N"
+        })
+            
+    except Exception as e:
+        session.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        session.close()
+
+
+

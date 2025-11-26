@@ -451,8 +451,11 @@ document.getElementById('calculateDepreciationBtn')?.addEventListener('click', a
             const car = data.car;
             const depreciation = data.depreciation;
             
+            // Use estimated_new_price if available, otherwise fall back to purchase_price
+            const estimatedNewPrice = car.estimated_new_price || car.purchase_price;
+            
             // Update car info
-            document.getElementById('depPurchasePrice').textContent = '€' + car.estimated_new_price.toLocaleString();
+            document.getElementById('depPurchasePrice').textContent = '€' + (estimatedNewPrice ? estimatedNewPrice.toLocaleString() : 'N/A');
             document.getElementById('depCarAge').textContent = depreciation.age_years.toFixed(1) + ' years';
             document.getElementById('depAnnualKm').textContent = depreciation.actual_km_per_year.toLocaleString() + ' km/year';
             document.getElementById('depCurrentKm').textContent = car.current_mileage.toLocaleString() + ' km';
@@ -466,13 +469,13 @@ document.getElementById('calculateDepreciationBtn')?.addEventListener('click', a
             
             // Calculate age-based depreciation using compound depreciation (time only)
             // Value with only time depreciation = purchase_price * (1 - time_rate)^age
-            const valueWithTimeOnly = car.estimated_new_price * Math.pow(1 - depreciation.time_depreciation_rate, depreciation.age_years);
-            const ageDepAmount = car.estimated_new_price - valueWithTimeOnly;
-            const ageDepPercent = (ageDepAmount / car.estimated_new_price) * 100;
+            const valueWithTimeOnly = estimatedNewPrice * Math.pow(1 - depreciation.time_depreciation_rate, depreciation.age_years);
+            const ageDepAmount = estimatedNewPrice - valueWithTimeOnly;
+            const ageDepPercent = (ageDepAmount / estimatedNewPrice) * 100;
             
             // Mileage depreciation is the additional depreciation from mileage penalty
             const mileageDepAmount = totalDepAmount - ageDepAmount;
-            const mileageDepPercent = (mileageDepAmount / car.estimated_new_price) * 100;
+            const mileageDepPercent = (mileageDepAmount / estimatedNewPrice) * 100;
             
             document.getElementById('depAgeAmount').textContent = '€' + Math.round(ageDepAmount).toLocaleString();
             document.getElementById('depAgePercent').textContent = ageDepPercent.toFixed(1);
