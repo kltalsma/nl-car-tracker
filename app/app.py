@@ -3533,6 +3533,45 @@ def init_database():
         session.close()
 
 
+
+@app.route("/admin/import-sql/<token>", methods=["POST"])
+def import_sql_dump(token):
+    """Import SQL dump to populate database"""
+    import os
+    import sqlite3
+    
+    # Check token
+    valid_token = os.environ.get("INIT_DB_TOKEN", "init-railway-db-2024")
+    if token != valid_token:
+        return jsonify({"status": "error", "message": "Invalid token"}), 403
+    
+    try:
+        # Get SQL from request body
+        sql_dump = request.get_data(as_text=True)
+        
+        if not sql_dump:
+            return jsonify({"status": "error", "message": "No SQL data provided"}), 400
+        
+        # Connect directly to SQLite
+        db_path = config["database"]["path"]
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Execute SQL dump
+        cursor.executescript(sql_dump)
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Database imported successfully",
+            "lines": len(sql_dump.split(chr(10)))
+        })
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 if __name__ == '__main__':
     # Run Flask development server with threading enabled
     # Threading is required to handle concurrent requests when scrapers are running
