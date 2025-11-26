@@ -7,7 +7,9 @@ import os
 # Add parent directory to path to import models
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask_login import login_required, logout_user, login_user
+from app.auth import init_auth, check_credentials, User
 from models.database import Database, Car, PriceHistory, ScraperLog
 from sqlalchemy import desc, func, or_, case
 from datetime import datetime, timedelta
@@ -33,6 +35,9 @@ with open(config_path, 'r') as f:
 
 # Initialize database
 db = Database(config['database']['path'])
+
+# Initialize authentication
+login_manager = init_auth(app)
 
 # Get latest trade-in value for net cost calculation
 def get_latest_trade_in_value():
@@ -942,6 +947,30 @@ def check_critical_features(car, config):
     return results
 
 
+
+@app.route(/login, methods=[GET, POST])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        if check_credentials(username, password):
+            user = User(username)
+            login_user(user)
+            next_page = request.args.get('next')
+            return redirect(next_page or url_for('index'))
+        else:
+            flash('Invalid username or password')
+    
+    return render_template('login.html')
+
+@app.route(/logout)
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
+@login_required
 @app.route('/')
 def index():
     """Home page with car listings"""
@@ -1113,6 +1142,7 @@ def index():
                          config=config)
 
 
+@login_required
 @app.route('/car/<int:car_id>')
 def car_detail(car_id):
     """Detailed view of a single car"""
@@ -1166,6 +1196,7 @@ def car_detail(car_id):
                          config=config)
 
 
+@login_required
 @app.route('/my-matches')
 def my_matches():
     """Show cars matching user's specific requirements with clear indicators"""
@@ -1419,6 +1450,7 @@ def my_matches():
                          stats=stats)
 
 
+@login_required
 @app.route('/top-matches')
 def top_matches():
     """Show top 3 Full Electric and top 3 PHEV/Hybrid cars based on smart scoring (price, odometer, range, age)"""
@@ -1694,6 +1726,7 @@ def top_matches():
                           user_reqs=user_reqs)
 
 
+@login_required
 @app.route('/analytics')
 def analytics():
     """Analytics and charts page"""
@@ -1901,6 +1934,7 @@ def analytics():
                          config=config)
 
 
+@login_required
 @app.route('/api/cars')
 def api_cars():
     """API endpoint for car listings (JSON)"""
@@ -1935,6 +1969,7 @@ def api_cars():
     return jsonify(cars_data)
 
 
+@login_required
 @app.route('/api/stats')
 def api_stats():
     """API endpoint for statistics (JSON)"""
@@ -1974,6 +2009,7 @@ def api_stats():
     return jsonify(stats)
 
 
+@login_required
 @app.route('/unavailable-cars')
 def unavailable_cars():
     """Show all unavailable cars with filter for preferred ones"""
@@ -2013,6 +2049,7 @@ def unavailable_cars():
                          config=config)
 
 
+@login_required
 @app.route('/admin')
 def admin():
     """Admin panel for scraper management"""
@@ -2081,6 +2118,7 @@ def admin():
     )
 
 
+@login_required
 @app.route('/api/trigger-scrape', methods=['POST'])
 def trigger_scrape():
     """Manually trigger a scraper run"""
@@ -2142,6 +2180,7 @@ def trigger_scrape():
         }), 500
 
 
+@login_required
 @app.route('/api/trigger-availability-check', methods=['POST'])
 def trigger_availability_check():
     """Manually trigger availability check"""
@@ -2176,6 +2215,7 @@ def trigger_availability_check():
         }), 500
 
 
+@login_required
 @app.route('/api/scraper-logs', methods=['GET'])
 def get_scraper_logs():
     """Get recent scraper log entries"""
@@ -2242,6 +2282,7 @@ def get_scraper_logs():
         }), 500
 
 
+@login_required
 @app.route('/api/mark-available/<int:car_id>', methods=['POST'])
 def mark_car_available(car_id):
     """
@@ -2300,6 +2341,7 @@ def mark_car_available(car_id):
         }), 500
 
 
+@login_required
 @app.route('/api/exclusions', methods=['GET'])
 def get_exclusions():
     """Get all excluded models from config"""
@@ -2326,6 +2368,7 @@ def get_exclusions():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@login_required
 @app.route('/api/exclusions', methods=['POST'])
 def add_exclusion():
     """Add a new exclusion to config"""
@@ -2385,6 +2428,7 @@ def add_exclusion():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@login_required
 @app.route('/api/exclusions/<path:exclusion_id>', methods=['DELETE'])
 def delete_exclusion(exclusion_id):
     """Delete an exclusion from config"""
@@ -2436,6 +2480,7 @@ def delete_exclusion(exclusion_id):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@login_required
 @app.route('/api/availability-history')
 def api_availability_history():
     """API endpoint for availability check history"""
@@ -2482,6 +2527,7 @@ def api_availability_history():
         }), 500
 
 
+@login_required
 @app.route('/api/scraper-statistics')
 def api_scraper_statistics():
     """API endpoint for scraper statistics per website"""
@@ -2551,6 +2597,7 @@ def api_scraper_statistics():
         }), 500
 
 
+@login_required
 @app.route('/api/scraper-trends')
 def get_scraper_trends():
     """Get scraper performance trends over the last 30 days"""
@@ -2641,6 +2688,7 @@ def get_scraper_trends():
         }), 500
 
 
+@login_required
 @app.route('/api/scheduler-status')
 def get_scheduler_status():
     """Get current scheduler configuration and status"""
@@ -2710,6 +2758,7 @@ def get_scheduler_status():
         }), 500
 
 
+@login_required
 @app.route('/api/scheduler-update', methods=['POST'])
 def update_scheduler_config():
     """Update scheduler configuration in config.yaml"""
@@ -2782,6 +2831,7 @@ def update_scheduler_config():
         }), 500
 
 
+@login_required
 @app.route('/api/critical-features', methods=['GET'])
 def get_critical_features():
     """Get list of all possible critical features with their enabled status, organized by category"""
@@ -2865,6 +2915,7 @@ def get_critical_features():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@login_required
 @app.route('/api/critical-features/<path:feature_id>', methods=['PUT'])
 def update_critical_feature(feature_id):
     """Enable or disable a critical feature"""
@@ -2967,6 +3018,7 @@ def update_critical_feature(feature_id):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@login_required
 @app.route('/trade-in-value')
 def trade_in_value_page():
     """Page to view and update trade-in value"""
@@ -2997,6 +3049,7 @@ def trade_in_value_page():
                           config=config)
 
 
+@login_required
 @app.route('/api/trade-in-value', methods=['POST'])
 def update_trade_in_value():
     """API endpoint to manually update trade-in value"""
@@ -3068,6 +3121,7 @@ def update_trade_in_value():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@login_required
 @app.route('/api/update-mileage', methods=['POST'])
 def update_mileage():
     """API endpoint to update only the current car's mileage"""
@@ -3124,6 +3178,7 @@ def update_mileage():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@login_required
 @app.route('/api/calculate-depreciation', methods=['GET'])
 def calculate_depreciation():
     """API endpoint to calculate depreciation for current car"""
@@ -3206,6 +3261,7 @@ def calculate_depreciation():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@login_required
 @app.route('/api/scraper-service/status', methods=['GET'])
 def get_scraper_service_status():
     """Get the status of the scraper Docker container"""
@@ -3273,6 +3329,7 @@ def get_scraper_service_status():
         }), 500
 
 
+@login_required
 @app.route('/api/scraper-service/control', methods=['POST'])
 def control_scraper_service():
     """Start or stop the scraper Docker container"""
