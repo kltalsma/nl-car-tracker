@@ -3542,3 +3542,56 @@ if __name__ == '__main__':
         debug=config['dashboard']['debug'],
         threaded=True
     )
+@app.route("/admin/init-database-token/<token>", methods=["GET"])
+def init_database_with_token(token):
+    """Initialize database with token - no login required"""
+    import os
+    
+    # Check token
+    valid_token = os.environ.get("INIT_DB_TOKEN", "init-railway-db-2024")
+    if token != valid_token:
+        return jsonify({"status": "error", "message": "Invalid token"}), 403
+    
+    from models.database import CurrentCar
+    session = db.get_session()
+    
+    try:
+        # Check if already initialized
+        existing_car = session.query(CurrentCar).first()
+        if existing_car:
+            return jsonify({"status": "already_initialized", "message": "Database already has current car data"})
+        
+        # Add current car
+        current_car = CurrentCar(
+            license_plate="SX-515-N",
+            make="OPEL",
+            model="ASTRA SPORTS TOURER+",
+            year=2018,
+            mileage_km=151000,
+            fuel_type="Benzine",
+            body_type="Personenauto",
+            color="GRIJS",
+            rdw_data={},
+            purchase_price=16750.0,
+            purchase_date=datetime(2022, 1, 15),
+            target_sale_value=14000,
+            purchase_mileage_km=74751,
+            estimated_new_price=29838.0
+        )
+        session.add(current_car)
+        session.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Database initialized with current car data",
+            "car": "SX-515-N"
+        })
+            
+    except Exception as e:
+        session.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        session.close()
+
+
+
