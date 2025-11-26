@@ -36,6 +36,9 @@ with open(config_path, 'r') as f:
 # Initialize database
 db = Database(config['database']['path'])
 
+# Initialize authentication
+login_manager = init_auth(app)
+
 # Get latest trade-in value for net cost calculation
 def get_latest_trade_in_value():
     """Get the latest trade-in value from the database"""
