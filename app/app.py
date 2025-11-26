@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 from flask_login import login_required, logout_user, login_user
-from app.auth import init_auth, check_credentials, User
+from auth import init_auth, check_credentials, User
 from models.database import Database, Car, PriceHistory, ScraperLog
 from sqlalchemy import desc, func, or_, case
 from datetime import datetime, timedelta
