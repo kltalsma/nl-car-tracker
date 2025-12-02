@@ -89,6 +89,7 @@ vehicle_classification:
     Volkswagen:
     - Passat Variant
     - ID.7 Tourer
+    - Arteon
     Audi:
     - A4 Avant
     - A6 Avant
@@ -194,6 +195,8 @@ vehicle_classification:
     - e-Up
     - e-up! e-up! Style
     - ID. Buzz Cargo
+    - Caddy
+    - Caddy Kombi Maxi
     Audi:
     - A3
     - Q2
@@ -241,6 +244,7 @@ vehicle_classification:
     - Soul e-Soul
     - e-Soul
     Maxus: []
+    Polestar: []
 search_criteria:
   min_price: 15000
   max_price: 35000
@@ -299,7 +303,7 @@ critical_features:
 - Adaptive Cruise Control
 - Park Assist
 - Achteruitrijcamera
-- 360° camera
+- "360\xB0 camera"
 - Dodehoekdetectie
 - Botswaarschuwing
 - Parkeerhulp automatisch

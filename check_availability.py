@@ -103,6 +103,15 @@ class AvailabilityChecker:
         
         # Track which websites have had cookies loaded
         self.cookies_loaded = set()
+    def preload_all_cookies(self):
+        """Pre-load cookies for all configured websites to improve performance"""
+        if not self.driver:
+            self._init_driver()
+        
+        logger.info("Pre-loading cookies for all configured websites...")
+        for website in self.cookies_files.keys():
+            self.load_cookies(website)
+        logger.info(f"Pre-loaded cookies for {len(self.cookies_loaded)} websites")
     
     def _init_driver(self):
         """Initialize Selenium WebDriver"""
@@ -112,6 +121,14 @@ class AvailabilityChecker:
         options = Options()
         if self.headless:
             options.add_argument('--headless=new')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--disable-images')
+            options.add_argument('--disable-javascript-debugging')
+            options.add_argument('--disable-extensions')
+            options.add_argument('--disable-logging')
+            options.add_argument('--disable-background-timer-throttling')
+            options.add_argument('--disable-backgrounding-occluded-windows')
+            options.add_argument('--disable-renderer-backgrounding')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-blink-features=AutomationControlled')
@@ -482,9 +499,12 @@ class AvailabilityChecker:
                     cutoff_date = datetime.utcnow() - timedelta(days=filters['older_than_days'])
                     query = query.filter(Car.last_seen < cutoff_date)
                 
-                # Limit
-                if filters.get('limit'):
-                    query = query.limit(filters['limit'])
+            # Order by last_seen to check oldest cars first
+            query = query.order_by(Car.last_seen.asc())
+
+            # Limit
+            if filters.get('limit'):
+                query = query.limit(filters['limit'])
             
             # Get cars to check
             cars = query.all()
@@ -500,6 +520,7 @@ class AvailabilityChecker:
             
             # Initialize browser
             self._init_driver()
+            self.preload_all_cookies()
             
             # Check each car
             checked = 0

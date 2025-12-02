@@ -998,7 +998,11 @@ def index():
     sort_by = request.args.get('sort_by', 'last_seen')
     
     # Build query
-    query = session.query(Car).filter(Car.is_available == True)
+    query = session.query(Car).filter(
+        Car.is_available == True,
+        # Distance filter: only show cars within 80km of Heerenveen (or cars without distance data)
+        or_(Car.distance_from_heerenveen_km <= 80, Car.distance_from_heerenveen_km.is_(None))
+    )
     
     # Apply filters
     if vehicle_type:
@@ -1250,7 +1254,9 @@ def my_matches():
         Car.price <= user_reqs['max_price'],
         Car.year >= user_reqs['acceptable_year'],
         Car.mileage_km < user_reqs['max_mileage_acceptable'],
-        Car.fuel_type.in_(['Full Electric', 'PHEV', 'Hybrid'])  # Only EV/PHEV/Hybrid
+        Car.fuel_type.in_(['Full Electric', 'PHEV', 'Hybrid']),  # Only EV/PHEV/Hybrid
+        # Distance filter: only show cars within 80km of Heerenveen (or cars without distance data)
+        or_(Car.distance_from_heerenveen_km <= 80, Car.distance_from_heerenveen_km.is_(None))
     )
     
     # Apply additional filters from request
@@ -1388,26 +1394,30 @@ def my_matches():
     analyzed_cars.sort(key=lambda x: (-x['match_score'], x['car'].price))
     
     # Split into three tiers based on critical features count
-    # Tier 1: Perfect Matches (8/8 critical features)
-    # Tier 2: Great Matches (6-7/8 critical features)
-    # Tier 3: Good Matches (4-5/8 critical features)
-    # Below 4: Not shown (too many missing features)
+    # Dynamic thresholds based on total number of critical features
+    # Perfect Matches: 100% (all features)
+    # Great Matches: 89-94% (missing 1-2 features)  
+    # Good Matches: 56-83% (missing 3-8 features)
     
     total_critical = len(config.get('critical_features', []))
     perfect_matches = []
     great_matches = []
     good_matches = []
     
+    # Calculate dynamic thresholds based on total features
+    great_threshold = max(total_critical - 2, int(total_critical * 0.89))  # At least 89% or all but 2
+    good_threshold = max(int(total_critical * 0.56), 10)  # At least 56% or minimum 10 features
+    
     for item in analyzed_cars:
         features_met = total_critical - item['missing_critical_count']
         
-        if item['dealbreakers_met']:  # 8/8
+        if item['dealbreakers_met']:  # All features present
             perfect_matches.append(item)
-        elif features_met >= 6:  # 6-7/8
+        elif features_met >= great_threshold:  # Great matches (89-94%)
             great_matches.append(item)
-        elif features_met >= 4:  # 4-5/8
+        elif features_met >= good_threshold:  # Good matches (56%+)
             good_matches.append(item)
-        # Cars with fewer than 4 features are not shown
+        # Cars below good_threshold are not shown
     
     # Get unique makes and models for filter dropdowns
     available_makes = session.query(Car.make).filter(Car.is_available == True).distinct().order_by(Car.make).all()
@@ -1485,7 +1495,9 @@ def top_matches():
     # Build base query for Full Electric cars
     full_electric_query = session.query(Car).filter(
         Car.is_available == True,
-        Car.fuel_type == 'Full Electric'
+        Car.fuel_type == 'Full Electric',
+        # Distance filter: only show cars within 80km of Heerenveen (or cars without distance data)
+        or_(Car.distance_from_heerenveen_km <= 80, Car.distance_from_heerenveen_km.is_(None))
     )
     
     # Apply filters to Full Electric query
@@ -1584,7 +1596,9 @@ def top_matches():
     # Build base query for PHEV/Hybrid cars
     phev_query = session.query(Car).filter(
         Car.is_available == True,
-        Car.fuel_type.in_(['PHEV', 'Hybrid'])
+        Car.fuel_type.in_(['PHEV', 'Hybrid']),
+        # Distance filter: only show cars within 80km of Heerenveen (or cars without distance data)
+        or_(Car.distance_from_heerenveen_km <= 80, Car.distance_from_heerenveen_km.is_(None))
     )
     
     # Apply filters to PHEV query
