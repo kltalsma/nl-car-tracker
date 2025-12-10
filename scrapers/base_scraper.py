@@ -891,6 +891,10 @@ class BaseScraper(ABC):
                             car_data = self.parse_car_detail(car_summary)
                             
                             if car_data:
+                                # Validate distance from Heerenveen
+                                if not self._validate_distance(car_data, max_distance_km=80):
+                                    continue
+                                
                                 # Skip hydrogen fuel cell vehicles
                                 fuel_type = car_data.get('fuel_type', '')
                                 if fuel_type and fuel_type.lower() in ['hydrogen', 'waterstof']:
