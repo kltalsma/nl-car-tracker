@@ -953,3 +953,31 @@ class BaseScraper(ABC):
         
         finally:
             self._close_driver()
+
+    def _validate_distance(self, car_data: Dict, max_distance_km: int = 80) -> bool:
+        """
+        Validate car is within distance limit.
+        
+        Args:
+            car_data: Dictionary containing car information
+            max_distance_km: Maximum allowed distance in kilometers (default: 80)
+            
+        Returns:
+            True if within limit or distance unknown, False otherwise
+        """
+        distance = car_data.get('distance_from_heerenveen_km')
+        
+        if distance is None:
+            # Allow cars with unknown distance (will be calculated later)
+            return True
+        
+        if distance > max_distance_km:
+            self.logger.warning(
+                f"Skipping car outside {max_distance_km}km radius: "
+                f"{car_data.get('make', 'Unknown')} {car_data.get('model', '')} "
+                f"in {car_data.get('location_city', 'Unknown')} "
+                f"- {distance:.1f}km from Heerenveen"
+            )
+            return False
+        
+        return True
