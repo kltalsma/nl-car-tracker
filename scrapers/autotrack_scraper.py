@@ -110,6 +110,8 @@ class AutotrackScraper(BaseScraper):
                     params.append(f"pageSize=30")
                     params.append(f"sortField=relevance")
                     params.append(f"sortOrder=asc")
+                    # Exclude private sellers (particulier) - only professional dealers
+                    params.append("data.verkoopttype.filter.0.slug=zakelijk")
                     
                     # Note: Price, year, mileage, and vehicle type filtering will be done
                     # in parse_car_detail() since they're not easily added to URL
