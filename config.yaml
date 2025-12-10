@@ -137,6 +137,7 @@ vehicle_classification:
     - Corsa-e GS
     - Combo
     - Combo-e
+    - Vivaro
     Renault:
     - Megane E-Tech
     - Kangoo
@@ -197,6 +198,7 @@ vehicle_classification:
     - ID. Buzz Cargo
     - Caddy
     - Caddy Kombi Maxi
+    - e-up
     Audi:
     - A3
     - Q2
@@ -245,6 +247,9 @@ vehicle_classification:
     - e-Soul
     Maxus: []
     Polestar: []
+    Leapmotor: []
+    Volkswagfen:
+    - e-up
 search_criteria:
   min_price: 15000
   max_price: 35000
@@ -290,7 +295,7 @@ search:
   min_seats: 5
   location:
     center: Heerenveen
-    radius_km: 100
+    radius_km: 80
 critical_features:
 - Cruise Control
 - Android Auto
