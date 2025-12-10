@@ -68,6 +68,7 @@ class AutoScout24Scraper(BaseScraper):
                         'zipc': '8448',  # Heerenveen postal code
                         'dist': 80,      # 80km radius
                         'country': 'NL', # Netherlands only
+                        'custtype': 'D', # Dealers only (exclude private sellers/particulier)
                         # Note: Not using body filter as codes may vary - relying on keyword filtering instead
                     }
                     
