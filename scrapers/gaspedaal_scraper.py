@@ -119,6 +119,8 @@ class GaspedaalScraper(BaseScraper):
                 params.append(f"prijs_tot={vehicle['max_price']}")
                 params.append(f"bouwjaar_vanaf={self.config['search']['min_year']}")
                 params.append(f"km_tot={self.config['search']['max_mileage_km']}")
+                # Exclude private sellers (particulier) - only professional dealers
+                params.append("aanbieder=zakelijk")
                 
                 full_url = url + "?" + "&".join(params)
                 urls.append(full_url)
