@@ -64,6 +64,10 @@ class AutoScout24Scraper(BaseScraper):
                         'priceto': max_price,
                         'kmto': self.config['search']['max_mileage_km'],
                         'fregfrom': self.config['search']['min_year'],
+                        # Location filtering - 80km radius from Heerenveen
+                        'zipc': '8448',  # Heerenveen postal code
+                        'dist': 80,      # 80km radius
+                        'country': 'NL', # Netherlands only
                         # Note: Not using body filter as codes may vary - relying on keyword filtering instead
                     }
                     
