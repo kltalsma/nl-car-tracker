@@ -119,8 +119,6 @@ class GaspedaalScraper(BaseScraper):
                 params.append(f"prijs_tot={vehicle['max_price']}")
                 params.append(f"bouwjaar_vanaf={self.config['search']['min_year']}")
                 params.append(f"km_tot={self.config['search']['max_mileage_km']}")
-                # Exclude private sellers (particulier) - only professional dealers
-                params.append("aanbieder=zakelijk")
                 
                 full_url = url + "?" + "&".join(params)
                 urls.append(full_url)
@@ -236,15 +234,19 @@ class GaspedaalScraper(BaseScraper):
                     # Extract title (make + model) from h2
                     try:
                         title_elem = listing.find_element(By.CSS_SELECTOR, "h2")
-                        title = title_elem.text.strip()
-                        car_summary['title'] = title
+                        title = title_elem.text.strip() if title_elem else None
                         
-                        # Parse make and model from title
-                        title_parts = title.split()
-                        if len(title_parts) >= 2:
-                            car_summary['make'] = title_parts[0]
-                            raw_model = ' '.join(title_parts[1:])
-                            car_summary['model'] = normalize_model_name(raw_model)
+                        if title:
+                            car_summary['title'] = title
+                            
+                            # Parse make and model from title
+                            title_parts = title.split()
+                            if len(title_parts) >= 2:
+                                car_summary['make'] = title_parts[0]
+                                raw_model = ' '.join(title_parts[1:])
+                                car_summary['model'] = normalize_model_name(raw_model)
+                        else:
+                            car_summary['title'] = "Unknown"
                     except Exception as e:
                         self.logger.debug(f"Could not extract title: {e}")
                         car_summary['title'] = "Unknown"

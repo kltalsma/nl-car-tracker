@@ -6,6 +6,7 @@
     <title>{% block title %}T.A.L.S.M.A.-S.C.H.A.A.P.{% endblock %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="{{ url_for("static", filename="css/ui-enhancements.css") }}">
     <style>
         /* ===== CSS Variables for Consistent Theming ===== */
         :root {
@@ -394,6 +395,9 @@
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for("static", filename="js/components/toast-notifications.js") }}"></script>
+    <script src="{{ url_for("static", filename="js/components/skeleton-loading.js") }}"></script>
+    <script src="{{ url_for("static", filename="js/car-filtering.js") }}"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
     <script>

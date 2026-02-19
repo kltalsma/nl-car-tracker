@@ -36,3 +36,7 @@ EXPOSE 5000
 
 # Default command (can be overridden in docker-compose)
 CMD ["python", "app/app.py"]
+
+# Fix permissions for non-root user
+RUN chmod -R 777 /app/data /app/logs && \
+    chmod 666 /app/config.yaml

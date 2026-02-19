@@ -4,7 +4,7 @@ services:
     build: .
     container_name: nl-car-tracker-web
     ports:
-      - "5001:5002"
+      - "30200:5002"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs

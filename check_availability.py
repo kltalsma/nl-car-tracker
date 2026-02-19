@@ -48,6 +48,38 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+
+def is_legitimate_autoscout24_redirect(original_url, current_url):
+    """Check if redirect is legitimate URL canonicalization vs unavailability"""
+    from urllib.parse import urlparse
+    import re
+    
+    # Parse URLs
+    original_parsed = urlparse(original_url)
+    current_parsed = urlparse(current_url)
+    
+    # Must be same domain
+    if original_parsed.netloc != current_parsed.netloc:
+        return False
+    
+    # Extract UUID pattern (8-4-4-4-12 format)
+    uuid_pattern = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+    original_uuid_match = re.search(uuid_pattern, original_url, re.IGNORECASE)
+    current_uuid_match = re.search(uuid_pattern, current_url, re.IGNORECASE)
+    
+    # Both URLs should have matching UUIDs
+    if not original_uuid_match or not current_uuid_match:
+        return False
+    if original_uuid_match.group(1).lower() != current_uuid_match.group(1).lower():
+        return False
+    
+    # Check if current URL looks like search page (indicates unavailability)
+    if "/lst/" in current_url or "/zoeken/" in current_url:
+        return False
+    
+    return True
+
+
 class AvailabilityChecker:
     """Check car availability across different websites"""
     
@@ -70,6 +102,7 @@ class AvailabilityChecker:
                 'niet meer beschikbaar',
                 'toon alternatieven',
                 'no longer available',
+                'bestaat helaas niet meer',
                 'show alternatives'
             ],
             'autotrack.nl': [
@@ -82,6 +115,13 @@ class AvailabilityChecker:
                 'niet meer beschikbaar',
                 'advertentie is verwijderd',
                 'niet gevonden'
+            ],
+            'vandenbrug.nl': [
+                'pagina kan niet worden gevonden',
+                'deze pagina kan niet worden gevonden',
+                'bestaat helaas niet meer',
+                'de auto is verkocht',
+                'oeps, deze pagina kan niet worden gevonden'
             ]
         }
         
@@ -103,15 +143,6 @@ class AvailabilityChecker:
         
         # Track which websites have had cookies loaded
         self.cookies_loaded = set()
-    def preload_all_cookies(self):
-        """Pre-load cookies for all configured websites to improve performance"""
-        if not self.driver:
-            self._init_driver()
-        
-        logger.info("Pre-loading cookies for all configured websites...")
-        for website in self.cookies_files.keys():
-            self.load_cookies(website)
-        logger.info(f"Pre-loaded cookies for {len(self.cookies_loaded)} websites")
     
     def _init_driver(self):
         """Initialize Selenium WebDriver"""
@@ -121,14 +152,6 @@ class AvailabilityChecker:
         options = Options()
         if self.headless:
             options.add_argument('--headless=new')
-            options.add_argument('--disable-gpu')
-            options.add_argument('--disable-images')
-            options.add_argument('--disable-javascript-debugging')
-            options.add_argument('--disable-extensions')
-            options.add_argument('--disable-logging')
-            options.add_argument('--disable-background-timer-throttling')
-            options.add_argument('--disable-backgrounding-occluded-windows')
-            options.add_argument('--disable-renderer-backgrounding')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-blink-features=AutomationControlled')
@@ -366,8 +389,13 @@ class AvailabilityChecker:
                         logger.warning(f"  ⚠️  Could not load cookies, treating as unavailable")
                         return (False, 'http_error')
                 
-                # Not a privacy gate - this is a real redirect indicating unavailability
-                if current_url != car.listing_url:
+                # Check if this is legitimate AutoScout24 URL canonicalization
+                if car.source_website == 'autoscout24.nl' and is_legitimate_autoscout24_redirect(car.listing_url, current_url):
+                    logger.info(f"  ✅ Legitimate URL canonicalization: {car.listing_url} -> {current_url}")
+                    # Update stored URL for future checks but continue availability checks
+                    car.listing_url = current_url
+                else:
+                    # This is a real redirect indicating unavailability
                     if recheck_mode:
                         logger.info(f"  ❌ STILL UNAVAILABLE: Redirected from {car.listing_url} to {current_url}")
                     else:
@@ -499,12 +527,9 @@ class AvailabilityChecker:
                     cutoff_date = datetime.utcnow() - timedelta(days=filters['older_than_days'])
                     query = query.filter(Car.last_seen < cutoff_date)
                 
-            # Order by last_seen to check oldest cars first
-            query = query.order_by(Car.last_seen.asc())
-
-            # Limit
-            if filters.get('limit'):
-                query = query.limit(filters['limit'])
+                # Limit
+                if filters.get('limit'):
+                    query = query.limit(filters['limit'])
             
             # Get cars to check
             cars = query.all()
@@ -520,7 +545,6 @@ class AvailabilityChecker:
             
             # Initialize browser
             self._init_driver()
-            self.preload_all_cookies()
             
             # Check each car
             checked = 0
@@ -548,6 +572,9 @@ class AvailabilityChecker:
                         marked_unavailable += 1
                         logger.info(f"  ➡️  Marked as UNAVAILABLE in database (reason: {reason})")
                         
+                        # Commit immediately after marking unavailable
+                        session.commit()
+                        
                         # Scrape alternatives for AutoScout24 listings
                         alternatives_count = self._scrape_and_save_alternatives(car)
                         total_alternatives_found += alternatives_count
@@ -560,7 +587,7 @@ class AvailabilityChecker:
                 # Small delay between requests
                 time.sleep(1)
             
-            # Commit changes
+            # Final commit for any remaining changes
             session.commit()
             
             # Print summary

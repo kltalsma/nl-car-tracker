@@ -592,6 +592,16 @@ def normalize_fuel_type(fuel_type_str: str, model_str: str = None) -> Optional[s
     # Dutch sites often use "Hybride benzine" or "Benzine hybrid"
     if any(term in fuel_lower for term in ['hybride benzine', 'benzine hybride', 'hybrid benzine', 'benzine hybrid', 'phev', 'plug-in', 'plugin', 'plug in']):
         return "PHEV"
+    # DEBUGGING: Renault E-Tech models that are only available as PHEV
+    if model_str and "e-tech" in model_str.lower():
+        logger.info(f"DEBUG: E-Tech model detected - model_str: '{model_str}', fuel_type_str: '{fuel_type_str}'")
+        model_lower = model_str.lower() if model_str else ""
+        phev_only_models = ["austral", "captur", "arkana"]
+        for phev_model in phev_only_models:
+            if phev_model in model_lower:
+                logger.info(f"DEBUG: PHEV model match found: '{phev_model}' in '{model_lower}' - RETURNING PHEV")
+                return "PHEV"
+        logger.info(f"DEBUG: E-Tech detected but no PHEV model match in: '{model_lower}'")
     
     # Explicitly reject benzine/gasoline/diesel cars
     benzine_terms = ['benzine', 'gasoline', 'petrol', 'diesel', 'gasoil', 'lpg', 'cng']

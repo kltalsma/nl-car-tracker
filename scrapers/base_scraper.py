@@ -120,25 +120,51 @@ class BaseScraper(ABC):
         if self.config['scraping']['browser']['headless']:
             chrome_options.add_argument('--headless=new')
         
-        # Additional options for stability
+        # Additional options for stability and containerized environments
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
+        chrome_options.add_argument('--disable-software-rasterizer')
+        chrome_options.add_argument('--disable-extensions')
+        chrome_options.add_argument('--disable-logging')
+        chrome_options.add_argument('--log-level=3')
+        chrome_options.add_argument('--silent')
         chrome_options.add_argument(f"user-agent={self.config['scraping']['browser']['user_agent']}")
         chrome_options.add_argument('--window-size=1920,1080')
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
         
         # Initialize driver
-        # Selenium 4.6+ has built-in driver management, try that first
+        # Try to use system chromedriver first (for Docker/K8s environments)
         try:
-            self.driver = webdriver.Chrome(options=chrome_options)
+            import shutil
+            system_chromedriver = shutil.which('chromedriver')
+            system_chromium = shutil.which('chromium') or shutil.which('chromium-browser')
+            
+            # Set chromium binary if found (for Debian-based containers)
+            if system_chromium:
+                self.logger.info(f"Using chromium binary at {system_chromium}")
+                chrome_options.binary_location = system_chromium
+            
+            if system_chromedriver:
+                self.logger.info(f"Using system chromedriver at {system_chromedriver}")
+                service = Service(executable_path=system_chromedriver)
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            else:
+                # Fallback to Selenium's built-in driver management
+                self.logger.info("System chromedriver not found, using Selenium's built-in driver management")
+                self.driver = webdriver.Chrome(options=chrome_options)
         except Exception as e:
-            # Fallback to webdriver_manager if built-in fails
-            self.logger.warning(f"Built-in driver management failed: {e}. Trying webdriver_manager...")
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            # Last resort: try webdriver_manager
+            self.logger.warning(f"Standard driver initialization failed: {e}. Trying webdriver_manager...")
+            try:
+                from webdriver_manager.chrome import ChromeDriverManager
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            except Exception as e2:
+                self.logger.error(f"All driver initialization methods failed: {e2}")
+                raise
         
         self.driver.implicitly_wait(2)  # Reduced from 10 to 2 seconds
         
@@ -891,19 +917,27 @@ class BaseScraper(ABC):
                             car_data = self.parse_car_detail(car_summary)
                             
                             if car_data:
-                                # Validate distance from Heerenveen
-                                if not self._validate_distance(car_data, max_distance_km=80):
-                                    continue
-                                
                                 # Skip hydrogen fuel cell vehicles
                                 fuel_type = car_data.get('fuel_type', '')
+                                # DEBUG: Log fuel_type for Austral cars specifically
+                                if "austral" in str(car_data.get("model", "")).lower():
+                                    self.logger.info(f"DEBUG AUSTRAL: fuel_type='{fuel_type}' (len={len(fuel_type)}, repr={repr(fuel_type)}) for {car_data.get('make')} {car_data.get('model')}")
+
                                 if fuel_type and fuel_type.lower() in ['hydrogen', 'waterstof']:
                                     self.logger.info(f"Skipping hydrogen vehicle: {car_data.get('make')} {car_data.get('model')}")
                                     continue
                                 
                                 # Skip benzine/diesel/gasoline vehicles (defense in depth)
+                                contains_fuel_terms = fuel_type and any(term in fuel_type.lower() for term in ["benzine", "gasoline", "petrol", "diesel"])
+                                is_not_hybrid_phev = fuel_type.lower() not in ["phev", "hybrid"]
+                                should_skip = contains_fuel_terms and is_not_hybrid_phev
+                                
+                                # DEBUG: Log decision logic for Austral cars
+                                if "austral" in str(car_data.get("model", "")).lower():
+                                    self.logger.info(f"DEBUG AUSTRAL SKIP LOGIC: contains_fuel_terms={contains_fuel_terms}, is_not_hybrid_phev={is_not_hybrid_phev}, should_skip={should_skip}")
+
                                 # These should already be filtered by normalize_fuel_type(), but double-check
-                                if fuel_type and any(term in fuel_type.lower() for term in ['benzine', 'gasoline', 'petrol', 'diesel', 'hybrid']) and fuel_type.lower() != 'phev':
+                                if should_skip:
                                     self.logger.info(f"Skipping benzine/diesel car: {car_data.get('make')} {car_data.get('model')} (fuel_type: {fuel_type})")
                                     continue
                                 
@@ -957,31 +991,3 @@ class BaseScraper(ABC):
         
         finally:
             self._close_driver()
-
-    def _validate_distance(self, car_data: Dict, max_distance_km: int = 80) -> bool:
-        """
-        Validate car is within distance limit.
-        
-        Args:
-            car_data: Dictionary containing car information
-            max_distance_km: Maximum allowed distance in kilometers (default: 80)
-            
-        Returns:
-            True if within limit or distance unknown, False otherwise
-        """
-        distance = car_data.get('distance_from_heerenveen_km')
-        
-        if distance is None:
-            # Allow cars with unknown distance (will be calculated later)
-            return True
-        
-        if distance > max_distance_km:
-            self.logger.warning(
-                f"Skipping car outside {max_distance_km}km radius: "
-                f"{car_data.get('make', 'Unknown')} {car_data.get('model', '')} "
-                f"in {car_data.get('location_city', 'Unknown')} "
-                f"- {distance:.1f}km from Heerenveen"
-            )
-            return False
-        
-        return True

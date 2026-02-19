@@ -287,6 +287,36 @@ class User(Base):
         return f"<User {self.username} (admin={self.is_admin})>"
 
 
+class UserFeedback(Base):
+    """User feedback (likes/dislikes) for cars"""
+    __tablename__ = 'user_feedback'
+    
+    id = Column(Integer, primary_key=True)
+    car_id = Column(Integer, ForeignKey('cars.id'), nullable=False, index=True)
+    feedback_type = Column(String(20), nullable=False, index=True)  # 'like' or 'dislike'
+    session_id = Column(String(255), index=True)
+    ip_address = Column(String(45))
+    user_agent = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    
+    # Relationships
+    car = relationship("Car")
+    
+    def __repr__(self):
+        return f"<UserFeedback car_id={self.car_id} type={self.feedback_type}>"
+    
+    def to_dict(self):
+        """Convert to dictionary"""
+        return {
+            'id': self.id,
+            'car_id': self.car_id,
+            'feedback_type': self.feedback_type,
+            'session_id': self.session_id,
+            'ip_address': self.ip_address,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
 def _set_sqlite_pragma(dbapi_conn, connection_record):
     """
     Set SQLite pragmas on every connection.

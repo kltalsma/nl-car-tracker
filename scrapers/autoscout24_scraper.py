@@ -59,35 +59,31 @@ class AutoScout24Scraper(BaseScraper):
                         'sort': 'age',
                         'desc': 1,
                         'ustate': 'U',  # Used cars
+                        'custtype': 'D',  # Dealers only (exclude private sellers)
                         'size': 20,
                         'page': page_num,
                         'priceto': max_price,
                         'kmto': self.config['search']['max_mileage_km'],
                         'fregfrom': self.config['search']['min_year'],
-                        # Location filtering - 80km radius from Heerenveen
-                        'zipc': '8448',  # Heerenveen postal code
-                        'dist': 80,      # 80km radius
-                        'country': 'NL', # Netherlands only
-                        'dealer': '1',   # Autobedrijf only (exclude particulier)
                         # Note: Not using body filter as codes may vary - relying on keyword filtering instead
                     }
                     
                     # Add fuel type filter
-                    # AutoScout24 fuel codes: E=Electric, H=Hybrid (includes PHEV)
+                    # AutoScout24 fuel codes: E=Electric, 2=Hybrid/PHEV, H=Hydrogen (Waterstof)
                     # We want to exclude gasoline (B=Benzine) and diesel (D=Diesel)
                     if fuel_type == "Full Electric":
                         params['fuel'] = 'E'  # Electric only
                     elif fuel_type == "PHEV":
                         # PHEV falls under Hybrid category in AutoScout24
-                        params['fuel'] = 'H'  # Hybrid (includes PHEV)
+                        params['fuel'] = '2'  # Hybrid (includes PHEV - corrected from H to 2)
                     elif fuel_type == "Hybrid":
-                        params['fuel'] = 'H'  # Hybrid
+                        params['fuel'] = '2'  # Hybrid (corrected from H to 2)
                     else:
                         # For any other fuel type, still filter to electric/hybrid only
-                        # Use multiple fuel types: E (Electric) and H (Hybrid)
+                        # Use multiple fuel types: E (Electric) and 2 (Hybrid)
                         # Note: AutoScout24 may not support multiple fuel params in one URL
                         # So we'll rely on post-scraping filtering and set to Electric/Hybrid
-                        params['fuel'] = 'E,H'  # Electric and Hybrid
+                        params['fuel'] = 'E,2'  # Electric and Hybrid (corrected H to 2)
                     
                     # Build URL string
                     param_str = '&'.join([f"{k}={v}" for k, v in params.items()])
@@ -182,20 +178,27 @@ class AutoScout24Scraper(BaseScraper):
                     # Get title from h2 element
                     try:
                         title_elem = listing.find_element(By.CSS_SELECTOR, "h2")
-                        title_text = title_elem.text.strip()
-                        # Parse title (usually "Make Model Version")
-                        title_parts = title_text.split()
-                        car_summary['make'] = title_parts[0] if len(title_parts) > 0 else "Unknown"
-                        # Use normalize_model_name to extract clean model name
-                        raw_model = ' '.join(title_parts[1:]) if len(title_parts) > 1 else "Unknown"
-                        car_summary['model'] = normalize_model_name(raw_model) or "Unknown"
+                        title_text = title_elem.text.strip() if title_elem else None
                         
-                        # Filter out vans and commercial vehicles
-                        van_keywords = ['vito', 'sprinter', 'transit', 'combo', 'partner', 'berlingo', 
-                                       'caddy', 'transporter', 'crafter', 'ducato', 'boxer', 'jumper',
-                                       'proace', 'vivaro', 'movano', 'expert', 'dispatch']
-                        model_lower = car_summary.get('model', '').lower()
-                        title_lower = title_text.lower()
+                        if title_text:
+                            # Parse title (usually "Make Model Version")
+                            title_parts = title_text.split()
+                            car_summary['make'] = title_parts[0] if len(title_parts) > 0 else "Unknown"
+                            # Use normalize_model_name to extract clean model name
+                            raw_model = ' '.join(title_parts[1:]) if len(title_parts) > 1 else "Unknown"
+                            car_summary['model'] = normalize_model_name(raw_model) or "Unknown"
+                            
+                            # Filter out vans and commercial vehicles
+                            van_keywords = ['vito', 'sprinter', 'transit', 'combo', 'partner', 'berlingo', 
+                                           'caddy', 'transporter', 'crafter', 'ducato', 'boxer', 'jumper',
+                                           'proace', 'vivaro', 'movano', 'expert', 'dispatch']
+                            model_lower = car_summary.get('model', '').lower()
+                            title_lower = title_text.lower()
+                        else:
+                            car_summary['make'] = "Unknown"
+                            car_summary['model'] = "Unknown"
+                            model_lower = ''
+                            title_lower = ''
                         if any(van in model_lower for van in van_keywords):
                             self.logger.info(f"  - Skipping van: {car_summary['make']} {car_summary['model']}")
                             continue
@@ -219,7 +222,7 @@ class AutoScout24Scraper(BaseScraper):
                         # Skip gasoline pattern check if this looks like an EV (has kWh battery size)
                         is_likely_ev = re.search(r'\d+\.?\d*\s*k?wh', model_and_title, re.IGNORECASE)
                         
-                        if not is_likely_ev:
+                        if not is_likely_ev and car_summary.get('fuel_type') not in ['PHEV', 'Hybrid']:
                             for pattern in gasoline_patterns:
                                 if re.search(pattern, model_and_title):
                                     self.logger.info(f"  - Skipping: Gasoline engine pattern detected in '{model_and_title}'")
@@ -258,6 +261,9 @@ class AutoScout24Scraper(BaseScraper):
                             car_summary['year'] = int(year_match.group(1))
                         
                         # Fuel type detection
+                        # Check if we are on a hybrid search page (fuel=2)
+                        is_hybrid_search_page = "fuel=2" in url
+                        
                         if 'Waterstof' in listing_text:
                             car_summary['fuel_type'] = 'Hydrogen'
                         elif 'Elektrisch' in listing_text:
@@ -266,14 +272,20 @@ class AutoScout24Scraper(BaseScraper):
                             car_summary['fuel_type'] = 'PHEV'
                         elif 'Hybride' in listing_text:
                             car_summary['fuel_type'] = 'Hybrid'
-                        elif 'Benzine' in listing_text:
-                            # Skip benzine cars immediately
+                        elif 'Benzine' in listing_text and car_summary.get('fuel_type') is None and not is_hybrid_search_page:
+                            # Skip benzine cars immediately (but only if not already identified as hybrid)
                             self.logger.info(f"  - Skipping benzine car: {car_summary['make']} {car_summary['model']}")
                             car_summary['skip_gasoline'] = True
-                        elif 'Diesel' in listing_text:
-                            # Skip diesel cars immediately
+                        elif 'Diesel' in listing_text and car_summary.get('fuel_type') is None and not is_hybrid_search_page:
+                            # Skip diesel cars immediately (but only if not already identified as hybrid)
                             self.logger.info(f"  - Skipping diesel car: {car_summary['make']} {car_summary['model']}")
                             car_summary['skip_gasoline'] = True
+                        
+                        # Fallback: If on hybrid search page but no fuel type detected, assume hybrid
+                        if is_hybrid_search_page and car_summary.get('fuel_type') is None:
+                            car_summary['fuel_type'] = 'Hybrid'
+                            self.logger.debug(f"Hybrid search page fallback: {car_summary['make']} {car_summary['model']} set to Hybrid")
+                        
                     except Exception as e:
                         self.logger.debug(f"Error extracting specs: {e}")
                     
@@ -668,6 +680,23 @@ class AutoScout24Scraper(BaseScraper):
                         if json_match:
                             data = json.loads(json_match.group(1))
                             seller = data.get('props', {}).get('pageProps', {}).get('listingDetails', {}).get('seller', {})
+                            
+                            # Extract seller type to filter private sellers
+                            seller_type = seller.get('type', '')
+                            is_dealer = seller.get('isDealer', True)  # Default to True to be safe
+                            
+                            # Skip private sellers (Particulier)
+                            if seller_type == 'Particulier' or is_dealer == False:
+                                self.logger.info(f"Skipping private seller: {seller_type}")
+                                return None
+                            
+                            # Extract dealer name if available
+                            if not car_data.get('dealer_name'):
+                                dealer_name = seller.get('companyName', '')
+                                if dealer_name:
+                                    car_data['dealer_name'] = dealer_name
+                                    self.logger.debug(f"Extracted dealer name from __NEXT_DATA__: {dealer_name}")
+                            
                             address = seller.get('address', {})
                             
                             # Build location string from address components
@@ -843,13 +872,18 @@ class AutoScout24Scraper(BaseScraper):
                         # Get title (VehicleCard uses span with VehicleCard_headline class)
                         try:
                             title_elem = listing.find_element(By.CSS_SELECTOR, ".VehicleCard_headline__l7hWc")
-                            title_text = title_elem.text.strip()
-                            title_parts = title_text.split()
-                            car_summary['make'] = title_parts[0] if len(title_parts) > 0 else "Unknown"
-                            raw_model = ' '.join(title_parts[1:]) if len(title_parts) > 1 else "Unknown"
-                            car_summary['model'] = normalize_model_name(raw_model)
+                            title_text = title_elem.text.strip() if title_elem else None
                             
-                            self.logger.debug(f"  - {car_summary['make']} {car_summary['model']}")
+                            if title_text:
+                                title_parts = title_text.split()
+                                car_summary['make'] = title_parts[0] if len(title_parts) > 0 else "Unknown"
+                                raw_model = ' '.join(title_parts[1:]) if len(title_parts) > 1 else "Unknown"
+                                car_summary['model'] = normalize_model_name(raw_model)
+                                
+                                self.logger.debug(f"  - {car_summary['make']} {car_summary['model']}")
+                            else:
+                                car_summary['make'] = "Unknown"
+                                car_summary['model'] = "Unknown"
                         except NoSuchElementException:
                             self.logger.warning(f"  - No title found, skipping")
                             continue

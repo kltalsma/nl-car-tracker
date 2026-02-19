@@ -110,8 +110,6 @@ class AutotrackScraper(BaseScraper):
                     params.append(f"pageSize=30")
                     params.append(f"sortField=relevance")
                     params.append(f"sortOrder=asc")
-                    # Exclude private sellers (particulier) - only professional dealers
-                    params.append("data.verkoopttype.filter.0.slug=zakelijk")
                     
                     # Note: Price, year, mileage, and vehicle type filtering will be done
                     # in parse_car_detail() since they're not easily added to URL
@@ -265,14 +263,20 @@ class AutotrackScraper(BaseScraper):
                             # Pattern: digit(s) + optional space + "/" + optional space + digit(s)
                             title = re.sub(r'^\d+\s*/\s*\d+\s*', '', title).strip()
                             
-                            car_summary['title'] = title
-                            
-                            # Try to parse make and model from title
-                            title_parts = title.split()
-                            if len(title_parts) >= 2:
-                                car_summary['make'] = title_parts[0]
-                                raw_model = ' '.join(title_parts[1:])
-                                car_summary['model'] = normalize_model_name(raw_model)
+                            # Check if title is still valid after cleaning
+                            if title:
+                                car_summary['title'] = title
+                                
+                                # Try to parse make and model from title
+                                title_parts = title.split()
+                                if len(title_parts) >= 2:
+                                    car_summary['make'] = title_parts[0]
+                                    raw_model = ' '.join(title_parts[1:])
+                                    car_summary['model'] = normalize_model_name(raw_model)
+                            else:
+                                car_summary['title'] = "Unknown"
+                        else:
+                            car_summary['title'] = "Unknown"
                     except:
                         car_summary['title'] = "Unknown"
                     

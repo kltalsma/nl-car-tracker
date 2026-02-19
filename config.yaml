@@ -61,6 +61,7 @@ vehicle_classification:
     Ford:
     - Mustang Mach-E
     - Kuga
+    - Mondeo
     Nissan:
     - Ariya
     - Qashqai
@@ -76,7 +77,7 @@ vehicle_classification:
     - CX-5
     - CX-60
     Renault:
-    - Megane E-Tech
+    - Austral
     MG:
     - ZS
     - Marvel R
@@ -117,11 +118,7 @@ vehicle_classification:
     CUPRA:
     - Leon Sportstourer
   exclude_models:
-    Ford:
-    - Tourneo
-    - Transit
-    - Puma
-    - Kuga
+    Ford: []
     Fiat: []
     Jeep:
     - Avenger
@@ -130,6 +127,7 @@ vehicle_classification:
     - '208'
     - e-2008
     - '2008'
+    - e-Traveller Long
     Opel:
     - Astra
     - Mokka
@@ -138,12 +136,21 @@ vehicle_classification:
     - Combo
     - Combo-e
     - Vivaro
+    - Grandland
+    - Corsa
+    - Rocks
     Renault:
-    - Megane E-Tech
     - Kangoo
     - Kangoo Advance
     - Twingo
     - Twingo Z.E. R80
+    - R
+    - Clio
+    - Zoe
+    - Traffic
+    - Renault Trafic E-Tech
+    - Renault Trafic E-Tech T29
+    - Captur
     Citroen:
     - Ami
     - C3
@@ -154,9 +161,7 @@ vehicle_classification:
     - ETP3
     Alfa Romeo:
     - Junior
-    MG:
-    - MG4
-    - MG5
+    MG: []
     Hyundai:
     - i20
     - i30
@@ -172,11 +177,13 @@ vehicle_classification:
     - Yaris Cross
     - Prius
     - bZ4X
+    - Aygo
     Nissan:
     - Leaf
     - Qashqai
     - Juke
     - Townstar
+    - Ariya Advance
     Mazda:
     - CX-30
     - MX-30
@@ -199,31 +206,37 @@ vehicle_classification:
     - Caddy
     - Caddy Kombi Maxi
     - e-up
+    - e-up!
+    - ABT
     Audi:
     - A3
     - Q2
     BMW:
     - 1 Series
     - 2 Series
+    - '225'
     Mercedes-Benz:
     - A-Class
     - B-Class
     - EQA
     - GLA
     - Citan
+    - EQT
     Tesla: []
     Skoda:
     - Citigo
     - Fabia
     - Scala
+    - Elroq
     SEAT:
     - Ibiza
     - Arona
     - Leon
-    CUPRA:
-    - Born
+    - Mii
+    CUPRA: []
     Volvo:
     - EX30
+    - XC40
     MINI: []
     Mini: []
     Smart: []
@@ -240,23 +253,30 @@ vehicle_classification:
     'smart #1': []
     Peugot:
     - e-208
+    - e-Traveller
     Dongfeng: []
     Kia:
     - E Soul
     - Soul e-Soul
     - e-Soul
+    - EV3
     Maxus: []
     Polestar: []
     Leapmotor: []
     Volkswagfen:
     - e-up
+    Mitsubishi:
+    - Colt
+    Suzuki:
+    - Swift
+    Cupra: []
 search_criteria:
   min_price: 15000
   max_price: 35000
   min_year: 2020
   acceptable_year: 2020
-  max_mileage_km: 100000
-  max_mileage_acceptable: 100000
+  max_mileage_km: 60000
+  max_mileage_acceptable: 60000
   min_doors: 4
   min_seats: 5
 preferred_cars:
@@ -289,7 +309,7 @@ search:
     min_range_km: 300
   - type: PHEV
     min_electric_range_km: 30
-  max_mileage_km: 100000
+  max_mileage_km: 60000
   min_year: 2020
   min_storage_capacity_liters: 400
   min_seats: 5
@@ -314,7 +334,6 @@ critical_features:
 - Parkeerhulp automatisch
 - Verkeersbordherkenning
 - DAB+ radio
-- Trekhaak
 nice_to_have_features:
 - Trekhaak
 - Hill-Hold Control

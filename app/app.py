@@ -1,4 +1,5 @@
 """
+import json
 Flask web dashboard for NL Car Tracker
 Displays scraped car listings and analytics
 """
@@ -7,16 +8,19 @@ import os
 # Add parent directory to path to import models
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
-from flask_login import login_required, logout_user, login_user
-from auth import init_auth, check_credentials, User
-from models.database import Database, Car, PriceHistory, ScraperLog
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session, make_response
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
+from models.database import Database, Car, PriceHistory, ScraperLog, User, UserFeedback
 from sqlalchemy import desc, func, or_, case
 from datetime import datetime, timedelta
 from utils.helpers import match_required_features, should_exclude_vehicle, get_boot_space, get_ev_database_range, get_wltp_range, extract_battery_size, calculate_towing_range, find_duplicate_cars
 from apscheduler.schedulers.background import BackgroundScheduler
 import yaml
 import os
+import uuid
+from sqlalchemy import text
 import logging
 import atexit
 import threading
@@ -28,6 +32,45 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-i
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
+# Initialize Flask-Login
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+login_manager.login_message = 'Please log in to access this page.'
+login_manager.login_message_category = 'info'
+
+@login_manager.user_loader
+def load_user(user_id):
+    """Load user by ID for Flask-Login"""
+    session = db.get_session()
+    try:
+        user = session.query(User).filter_by(id=int(user_id), is_active=True).first()
+        if user:
+            # Make User class compatible with Flask-Login
+            user.is_authenticated = True
+            user.is_active = True
+            user.is_anonymous = False
+            user.get_id = lambda: str(user.id)
+        return user
+    except Exception as e:
+        logger.error(f"User loading error: {e}")
+        return None
+    finally:
+        session.close()
+
+def admin_required(f):
+    """Decorator to require admin privileges for a route"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return login_manager.unauthorized()
+        if not current_user.is_admin:
+            flash('You do not have permission to access this page.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 # Load configuration
 config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.yaml')
 with open(config_path, 'r') as f:
@@ -35,9 +78,6 @@ with open(config_path, 'r') as f:
 
 # Initialize database
 db = Database(config['database']['path'])
-
-# Initialize authentication
-login_manager = init_auth(app)
 
 # Get latest trade-in value for net cost calculation
 def get_latest_trade_in_value():
@@ -119,7 +159,6 @@ def initialize_current_car_from_config():
                 initial_purchase_price=current_car_config.get('initial_purchase_price'),
                 purchase_date=purchase_date,
                 average_km_per_year=current_car_config.get('average_km_per_year'),
-                purchase_mileage_km=current_car_config.get('purchase_mileage_km'),
                 estimated_new_price=current_car_config.get('estimated_new_price')
             )
             session.add(current_car)
@@ -168,16 +207,13 @@ def initialize_current_car_from_config():
                 existing_car.average_km_per_year = current_car_config.get('average_km_per_year')
                 updated = True
             
-            
-            # Update purchase_mileage_km if provided
-            if current_car_config.get("purchase_mileage_km") and existing_car.purchase_mileage_km != current_car_config.get("purchase_mileage_km"):
-                existing_car.purchase_mileage_km = current_car_config.get("purchase_mileage_km")
-                updated = True
-            
             # Update estimated_new_price if provided
-            if current_car_config.get("estimated_new_price") and existing_car.estimated_new_price != current_car_config.get("estimated_new_price"):
-                existing_car.estimated_new_price = current_car_config.get("estimated_new_price")
-                updated = True
+            if current_car_config.get('estimated_new_price'):
+                current_estimated = getattr(existing_car, 'estimated_new_price', None)
+                if current_estimated != current_car_config.get('estimated_new_price'):
+                    existing_car.estimated_new_price = current_car_config.get('estimated_new_price')
+                    updated = True
+            
             if updated:
                 session.commit()
                 logger.info(f"Updated current car from config: {license_plate}")
@@ -554,12 +590,12 @@ else:
     logger.info("Background scheduler is disabled in config.yaml")
 
 
-def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False):
+def calculate_car_score(car, config, distance_weight=0.1):
     """
-    Calculate a numeric score for a car based on multiple factors.
-    Lower score = better car.
+    Calculate a score for a car based on critical features, price, odometer, range, age, and distance.
+    Lower score = better match
     
-    Scoring breakdown (penalties - higher numbers are worse):
+    Scoring weights (default):
     - Critical Features: 45% (missing features increase score)
     - Price: 20% (lower is better)
     - Odometer: 15% (lower is better)
@@ -576,18 +612,8 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         car: Car object to score
         config: Configuration dictionary
         distance_weight: Weight for distance scoring (default 0.1 = 10%, can be increased for stronger local preference)
-        return_breakdown: If True, returns tuple of (score, breakdown_dict)
     """
     score = 0
-    breakdown = {
-        'critical_features': {'raw': 0, 'weighted': 0, 'details': {}},
-        'price': {'raw': 0, 'weighted': 0},
-        'mileage': {'raw': 0, 'weighted': 0},
-        'age': {'raw': 0, 'weighted': 0},
-        'distance': {'raw': 0, 'weighted': 0},
-        'range': {'raw': 0, 'weighted': 0},
-        'bonuses': []
-    }
     
     # CRITICAL FEATURES (45% weight - important but not disqualifying)
     critical_features = check_critical_features(car, config)
@@ -597,16 +623,9 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         # Base features score - simple ratio of missing features
         missing_critical = sum(1 for has_it in critical_features.values() if not has_it)
         features_score = (missing_critical / total_critical) * 100
-        weighted_features = features_score * 0.45
-        score += weighted_features
-        breakdown['critical_features']['raw'] = features_score
-        breakdown['critical_features']['weighted'] = weighted_features
-        breakdown['critical_features']['details'] = critical_features.copy()
+        score += features_score * 0.45
     else:
-        weighted_features = 50 * 0.45
-        score += weighted_features  # Moderate penalty for no features data
-        breakdown['critical_features']['raw'] = 50
-        breakdown['critical_features']['weighted'] = weighted_features
+        score += 50 * 0.45  # Moderate penalty for no features data
     
     # Check for trekhaak for bonus later
     has_trekhaak = critical_features.get('Trekhaak', False) if critical_features else False
@@ -627,32 +646,27 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
                 has_trekhaak = True
     
     # Price score (normalize to 0-100 scale, max price = 50000)
+    # Include trekhaak cost factor: +€1500 if missing trekhaak
     if car.price:
+        effective_price = car.price
+        
+        # Add trekhaak installation cost if car doesn't have one
+        if not has_trekhaak:
+            effective_price += 1500  # Cost to install aftermarket trekhaak
+            
         max_price = 50000
-        price_score = min((car.price / max_price) * 100, 100)
-        weighted_price = price_score * 0.2
-        score += weighted_price
-        breakdown['price']['raw'] = price_score
-        breakdown['price']['weighted'] = weighted_price
+        price_score = min((effective_price / max_price) * 100, 100)
+        score += price_score * 0.2
     else:
-        weighted_price = 100 * 0.2
-        score += weighted_price  # Penalty for missing price
-        breakdown['price']['raw'] = 100
-        breakdown['price']['weighted'] = weighted_price
+        score += 100 * 0.2  # Penalty for missing price
     
     # Odometer score (normalize to 0-100 scale, max mileage = 150000)
     if car.mileage_km:
         max_odometer = 150000
         odometer_score = min((car.mileage_km / max_odometer) * 100, 100)
-        weighted_mileage = odometer_score * 0.15
-        score += weighted_mileage
-        breakdown['mileage']['raw'] = odometer_score
-        breakdown['mileage']['weighted'] = weighted_mileage
+        score += odometer_score * 0.15
     else:
-        weighted_mileage = 100 * 0.15
-        score += weighted_mileage  # Penalty for missing odometer
-        breakdown['mileage']['raw'] = 100
-        breakdown['mileage']['weighted'] = weighted_mileage
+        score += 100 * 0.15  # Penalty for missing odometer
     
     # Age score (normalize to 0-100 scale, reference year = 2025, max age = 10 years)
     if car.year:
@@ -660,15 +674,9 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         age = current_year - car.year
         max_age = 10
         age_score = min((age / max_age) * 100, 100)
-        weighted_age = age_score * 0.05
-        score += weighted_age
-        breakdown['age']['raw'] = age_score
-        breakdown['age']['weighted'] = weighted_age
+        score += age_score * 0.05
     else:
-        weighted_age = 100 * 0.05
-        score += weighted_age  # Penalty for missing year
-        breakdown['age']['raw'] = 100
-        breakdown['age']['weighted'] = weighted_age
+        score += 100 * 0.05  # Penalty for missing year
     
     # Distance score (normalize to 0-100 scale - LOCAL DEALER PREFERENCE!)
     # Favor cars from nearby dealers for easier maintenance access
@@ -682,20 +690,14 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         # 75-100 km: Far (75-100 points)
         # 100+ km: Very far (100+ points)
         distance_score = min(distance, 100)  # Cap at 100 for scoring purposes
-        weighted_distance = distance_score * distance_weight
-        score += weighted_distance
-        breakdown['distance']['raw'] = distance_score
-        breakdown['distance']['weighted'] = weighted_distance
+        score += distance_score * distance_weight
     else:
-        weighted_distance = 75 * distance_weight
-        score += weighted_distance  # Moderate penalty for missing distance (assume mid-range)
-        breakdown['distance']['raw'] = 75
-        breakdown['distance']['weighted'] = weighted_distance
+        score += 75 * distance_weight  # Moderate penalty for missing distance (assume mid-range)
     
     # Range score (normalize to 0-100 scale, higher is better, max range = 600km)
-    # Use ad_listed_range_km (scraped from listings) with fallback to legacy field
-    # Note: We don't use WLTP or EV-DB here as they're not always available in the Car object at scoring time
-    range_km = car.ad_listed_range_km or car.electric_range_km
+    # PRIORITY: Use reliable data sources only - ad listings first, then WLTP official specs
+    # For PHEVs, this represents electric-only range. For Full Electric, this is total range.
+    range_km = car.ad_listed_range_km or car.wltp_reference_range_km
     if not range_km and car.model:
         # Known range estimates for popular models (WLTP)
         range_estimates = {
@@ -743,6 +745,11 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
             'Q4 e-tron': 520,
             'Q8 e-tron': 491,
             # BMW
+            # BMW PHEV SUVs
+            'X5 xDrive50e': 950,
+            'X5 xDrive45e': 920,
+            'X5 XDrive40e': 880,
+            'X5 xDrive40e': 880,
             'iX xDrive50': 630,
             'iX xDrive40': 425,
             'iX3': 461,
@@ -787,6 +794,7 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
             'I Pace': 470,
             'I-Pace': 470,
             # CUPRA
+# Additional Full Electric models            # Opel Electric            'Corsa E': 360,            # Renault Electric            'R 5 urban': 410,            'ZOE': 395,            # Volkswagen Electric (additional)            'e-up!': 260,
             'Tavascan 82': 550,
         }
         
@@ -801,14 +809,8 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         # Invert the score so higher range = lower score
         range_score = max(0, 100 - min((range_km / max_range) * 100, 100))
         score += range_score * 0.05
-        breakdown['range']['raw'] = range_score
-        breakdown['range']['weighted'] = range_score * 0.05
-        breakdown['range']['value'] = range_km
     else:
         score += 30 * 0.05  # Small penalty for missing range (assume decent 400km)
-        breakdown['range']['raw'] = 30
-        breakdown['range']['weighted'] = 30 * 0.05
-        breakdown['range']['value'] = None
     
     # ===== CONTENDER BONUSES =====
     # These bonuses can significantly boost a car's ranking
@@ -818,20 +820,26 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
     is_full_electric = car.fuel_type == 'Full Electric'
     is_phev_or_hybrid = car.fuel_type in ['PHEV', 'Hybrid']
     
-    # BONUS 1: Full Electric SUV with 500+ km range is a STRONG contender
-    if is_full_electric and is_suv and range_km and range_km >= 500:
+    # BONUS 1: Full Electric SUV with 400+ km REAL-WORLD range is a STRONG contender (for towing)
+    # Real-world range ≈ 75% of WLTP (winter/highway conditions)
+    real_world_range = range_km * 0.75 if range_km else 0
+    if is_full_electric and is_suv and real_world_range >= 400:
         score -= 10  # Major bonus! (lower score = better)
-        breakdown['bonuses'].append({'name': 'Full Electric SUV 500+ km', 'value': -10})
     
-    # BONUS 2: PHEV/Hybrid with 100+ km electric range is a good contender
-    if is_phev_or_hybrid and range_km and range_km >= 100:
-        score -= 5  # Good bonus!
-        breakdown['bonuses'].append({'name': 'PHEV/Hybrid 100+ km', 'value': -5})
+    
+    
+    # BONUS 2.5: Storage capacity 500L+ requirement (practical requirement)
+    if hasattr(car, 'storage_capacity_liters') and car.storage_capacity_liters and car.storage_capacity_liters >= 500:
+        score -= 3  # Bonus for meeting storage requirement
+    
+    # PENALTY: Storage below 500L is a significant drawback
+    if hasattr(car, 'storage_capacity_liters') and car.storage_capacity_liters and car.storage_capacity_liters < 500:
+        score += 8  # Penalty for insufficient storage
     
     # BONUS 3: SUV or Station Wagon body style (family-friendly)
     if is_suv or is_stationwagon:
         score -= 5  # Prefer larger family-friendly vehicles
-        breakdown['bonuses'].append({'name': 'SUV/Station Wagon', 'value': -5})
+# BONUS 4: PHEV preference - best of both worlds for family use    if car.fuel_type == "PHEV":        score -= 8  # Strong preference for plug-in hybrids        # BONUS 5: Higher seating position preference (SUV priority over station wagon)    if is_suv:        score -= 3  # Additional bonus for higher seating position        # BONUS 6: Family-sized PHEV SUV = ideal combination    if car.fuel_type == "PHEV" and is_suv and hasattr(car, "storage_capacity_liters") and car.storage_capacity_liters and car.storage_capacity_liters >= 500:        score -= 5  # Extra bonus for perfect family vehicle combination
     
     # BONUS 4: Preferred cars (based on config - Skoda Enyaq, Audi Q4, etc.)
     preferred_config = config.get('preferred_cars', {})
@@ -849,20 +857,18 @@ def calculate_car_score(car, config, distance_weight=0.1, return_breakdown=False
         
         if is_preferred_make or is_preferred_model:
             score -= 15  # Major bonus for preferred cars!
-            breakdown['bonuses'].append({'name': 'Preferred Car', 'value': -15})
         
         # Auto-prefer station wagons with 100+ km range
         if is_stationwagon and range_km and range_km >= auto_prefer_wagons_min_range:
             score -= 10  # Good bonus for practical wagons
-            breakdown['bonuses'].append({'name': f'Station Wagon {auto_prefer_wagons_min_range}+ km', 'value': -10})
     
+    # BONUS 5: Station wagon under 30k EUR - excellent value for families
+    if is_stationwagon and car.price and car.price < 30000:
+        score -= 8  # Strong bonus for affordable family cars!
     # Nice-to-have bonus: Trekhaak
     if has_trekhaak:
         score -= 5  # Small bonus for having towbar
-        breakdown['bonuses'].append({'name': 'Trekhaak', 'value': -5})
     
-    if return_breakdown:
-        return (score, breakdown)
     return score
 
 
@@ -947,30 +953,326 @@ def check_critical_features(car, config):
     return results
 
 
+logger.info("DEBUG: About to register login route")
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
-        
-        if check_credentials(username, password):
-            user = User(username)
-            login_user(user)
-            next_page = request.args.get("next")
-            return redirect(next_page or url_for("index"))
-        else:
-            flash("Invalid username or password")
+
+def get_enhanced_smart_learning_insights(session):
+    """Enhanced Smart Learning insights with multi-dimensional scoring and transparency"""
     
-    return render_template("login.html")
+    try:
+        # Use existing global config variable instead of loading again
+        config_makes = set(config.get('preferred_cars', {}).get('makes', []))
+        config_models = set(config.get('preferred_cars', {}).get('models', []))
+        min_price = config.get('search_criteria', {}).get('min_price', 0)
+        max_price = config.get('search_criteria', {}).get('max_price', 100000)
+        min_year = config.get('search_criteria', {}).get('min_year', 2000)
+        max_mileage = config.get('search_criteria', {}).get('max_mileage_km', 100000)
+        
+        # Get all user feedback with car data
+        feedback_query = session.query(
+            UserFeedback.feedback_type,
+            Car.make,
+            Car.model,
+            Car.fuel_type,
+            Car.price,
+            Car.year,
+            Car.mileage_km,
+            Car.id
+        ).join(Car, UserFeedback.car_id == Car.id).all()
+        
+    except Exception as e:
+        return {
+            'has_data': False,
+            'message': f'Error accessing feedback data: {str(e)}'
+        }
+    
+    if not feedback_query:
+        return {
+            'has_data': False,
+            'message': 'No user feedback data available yet. Start liking/disliking cars to build your personal preferences!'
+        }
+    
+    # Analyze brand preferences with enhanced scoring
+    brand_stats = {}
+    fuel_stats = {}
+    liked_cars = []
+    disliked_cars = []
+    
+    for feedback in feedback_query:
+        feedback_type, make, model, fuel_type, price, year, mileage_km, car_id = feedback
+        
+        # Track brand preferences
+        if make not in brand_stats:
+            brand_stats[make] = {'likes': 0, 'dislikes': 0, 'cars': []}
+        
+        brand_stats[make][f"{feedback_type}s"] += 1
+        brand_stats[make]['cars'].append({
+            'model': model,
+            'fuel_type': fuel_type,
+            'feedback': feedback_type,
+            'price': price,
+            'year': year,
+            'mileage_km': mileage_km,
+            'id': car_id
+        })
+        
+        # Track fuel type preferences  
+        if fuel_type not in fuel_stats:
+            fuel_stats[fuel_type] = {'likes': 0, 'dislikes': 0}
+        fuel_stats[fuel_type][f"{feedback_type}s"] += 1
+        
+        # Track specific cars
+        car_info = {
+            'make': make,
+            'model': model,
+            'fuel_type': fuel_type,
+            'price': price,
+            'year': year,
+            'mileage_km': mileage_km,
+            'id': car_id
+        }
+        
+        if feedback_type == 'like':
+            liked_cars.append(car_info)
+        else:
+            disliked_cars.append(car_info)
+    
+    # Enhanced brand preference calculation
+    brand_preferences = []
+    for make, stats in brand_stats.items():
+        total_feedback = stats['likes'] + stats['dislikes']
+        
+        if total_feedback == 0:
+            continue
+            
+        # Base preference score
+        like_rate = (stats['likes'] / total_feedback) * 100
+        
+        # Enhanced scoring with multiple dimensions
+        preference_score = like_rate
+        
+        # 1. Sample size confidence bonus (more feedback = more reliable)
+        confidence_multiplier = min(1.0, total_feedback / 10)  # Max at 10 samples
+        confidence_bonus = confidence_multiplier * 5  # Up to 5% bonus
+        
+        # 2. Config alignment bonus (user explicitly prefers this brand)
+        config_bonus = 10 if make in config_makes else 0
+        
+        # 3. Specification alignment bonus
+        spec_alignment = 0
+        for car in stats['cars']:
+            if (min_price <= (car['price'] or 0) <= max_price and
+                (car['year'] or 0) >= min_year and
+                (car['mileage_km'] or 0) <= max_mileage):
+                spec_alignment += 1
+        
+        spec_bonus = (spec_alignment / total_feedback) * 5 if total_feedback > 0 else 0
+        
+        # Final enhanced score
+        enhanced_score = preference_score + confidence_bonus + config_bonus + spec_bonus
+        
+        # Determine confidence level
+        if total_feedback >= 10:
+            confidence = 'HIGH'
+        elif total_feedback >= 5:
+            confidence = 'MEDIUM'
+        else:
+            confidence = 'LOW'
+        
+        brand_preferences.append({
+            'make': make,
+            'like_rate': round(like_rate, 1),
+            'enhanced_score': round(enhanced_score, 1),
+            'likes': stats['likes'],
+            'dislikes': stats['dislikes'],
+            'total': total_feedback,
+            'confidence': confidence,
+            'config_preferred': make in config_makes,
+            'bonuses': {
+                'confidence': round(confidence_bonus, 1),
+                'config': config_bonus,
+                'specs': round(spec_bonus, 1)
+            }
+        })
+    
+    # Sort by enhanced score
+    brand_preferences.sort(key=lambda x: x['enhanced_score'], reverse=True)
+    
+    # Get unique top liked cars (remove duplicates by make/model)
+    seen_cars = set()
+    unique_liked_cars = []
+    for car in sorted(liked_cars, key=lambda x: x['price'] or 0):
+        car_key = f"{car['make']}_{car['model']}"
+        if car_key not in seen_cars:
+            seen_cars.add(car_key)
+            unique_liked_cars.append(car)
+            if len(unique_liked_cars) >= 5:
+                break
+    
+    # Enhanced fuel type insights
+    fuel_insights = []
+    for fuel_type, stats in fuel_stats.items():
+        total = stats['likes'] + stats['dislikes'] 
+        if total >= 1:  # Include single feedback for fuel types
+            like_rate = (stats['likes'] / total) * 100
+            fuel_insights.append({
+                'fuel_type': fuel_type,
+                'like_rate': round(like_rate, 1),
+                'likes': stats['likes'],
+                'total': total
+            })
+    
+    fuel_insights.sort(key=lambda x: x['like_rate'], reverse=True)
+    
+    # Enhanced recommendations with transparency
+    recommendations = []
+    
+    # Brand recommendations with reasoning
+    if brand_preferences:
+        for i, brand in enumerate(brand_preferences[:3]):  # Top 3 brands
+            if brand['enhanced_score'] >= 70:  # Lower threshold to catch Skoda
+                message = f"Focus on {brand['make']} - {brand['like_rate']}% success rate with {brand['total']} samples"
+                if brand['config_preferred']:
+                    message += " (Config preferred ⭐)"
+                if brand['confidence'] == 'HIGH':
+                    message += " [HIGH CONFIDENCE]"
+                elif brand['confidence'] == 'MEDIUM':
+                    message += " [MEDIUM CONFIDENCE]"
+                
+                recommendations.append({
+                    'type': 'brand',
+                    'priority': i + 1,
+                    'message': message,
+                    'confidence': brand['confidence'].lower(),
+                    'data': brand
+                })
+    
+    # Fuel type recommendations
+    if fuel_insights and fuel_insights[0]['like_rate'] >= 60:
+        top_fuel = fuel_insights[0]
+        recommendations.append({
+            'type': 'fuel',
+            'message': f"{top_fuel['fuel_type']} vehicles match your preferences ({top_fuel['like_rate']}% like rate)",
+            'confidence': 'medium' if top_fuel['total'] >= 3 else 'low'
+        })
+    
+    # PHEV + Towing insight
+    phev_stats = next((f for f in fuel_insights if f['fuel_type'] == 'PHEV'), None)
+    if phev_stats and phev_stats['like_rate'] >= 70:
+        recommendations.append({
+            'type': 'towing',
+            'message': 'PHEVs are perfect for towing - electric daily, ICE backup for tent trailer trips',
+            'confidence': 'high'
+        })
+    
+    # Specific car recommendations based on top brands
+    specific_recommendations = []
+    for brand in brand_preferences[:2]:  # Top 2 brands only
+        if brand['enhanced_score'] >= 70:
+            brand_liked_cars = [car for car in liked_cars if car['make'] == brand['make']]
+            if brand_liked_cars:
+                top_model = max(brand_liked_cars, key=lambda x: x['year'] or 0)
+                specific_recommendations.append({
+                    'make': brand['make'],
+                    'model': top_model['model'],
+                    'fuel_type': top_model['fuel_type'],
+                    'reasoning': f"Based on {brand['like_rate']}% success rate with {brand['make']}"
+                })
+    
+    # Algorithm transparency
+    algorithm_info = {
+        'scoring_factors': [
+            'Explicit feedback rate (base score)',
+            'Sample size confidence boost',
+            'Config preference alignment (+10 pts)',
+            'Price/spec requirement matching (+5 pts max)'
+        ],
+        'total_analysis': len(feedback_query),
+        'confidence_levels': {
+            'HIGH': 'Sample size ≥10',
+            'MEDIUM': 'Sample size 5-9', 
+            'LOW': 'Sample size <5'
+        }
+    }
+    
+    return {
+        'has_data': True,
+        'total_feedback': len(feedback_query),
+        'total_likes': len(liked_cars),
+        'total_dislikes': len(disliked_cars),
+        'brand_preferences': brand_preferences[:5],  # Top 5
+        'fuel_insights': fuel_insights,
+        'top_liked_cars': unique_liked_cars,
+        'specific_recommendations': specific_recommendations,
+        'recommendations': recommendations,
+        'algorithm_transparency': algorithm_info
+    }
 
-@app.route("/logout")
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Login page and handler"""
+    # Redirect if already logged in
+    if hasattr(current_user, 'is_authenticated') and current_user.is_authenticated:
+        return redirect(url_for('index'))
+    
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        remember = request.form.get('remember', False)
+        
+        if not username or not password:
+            flash('Please enter both username and password.', 'danger')
+            return render_template('login.html')
+        
+        db_session = db.get_session()
+        try:
+            user = db_session.query(User).filter_by(username=username, is_active=True).first()
+            
+            if user and check_password_hash(user.password_hash, password):
+                # Update last login
+                user.last_login = datetime.utcnow()
+                db_session.commit()
+                
+                # Make user compatible with Flask-Login
+                user.is_authenticated = True
+                user.is_active = True
+                user.is_anonymous = False
+                user.get_id = lambda: str(user.id)
+                
+                # Log in the user
+                login_user(user, remember=remember)
+                
+                # Store username in session for compatibility
+                session['username'] = username
+                
+                flash(f'Welcome back, {username}!', 'success')
+                
+                # Redirect to next page or index
+                next_page = request.args.get('next')
+                if next_page:
+                    return redirect(next_page)
+                return redirect(url_for('index'))
+            else:
+                flash('Invalid username or password.', 'danger')
+        except Exception as e:
+            logger.error(f"Login error: {e}")
+            flash('An error occurred during login. Please try again.', 'danger')
+        finally:
+            db_session.close()
+    
+    return render_template('login.html')
+logger.info("DEBUG: Login route function defined")
+
+@app.route('/logout')
 @login_required
 def logout():
+    """Logout current user"""
+    username = session.get('username', 'User')
     logout_user()
-    return redirect(url_for("login"))
+    session.clear()
+    flash(f'You have been logged out successfully, {username}.', 'info')
+    return redirect(url_for('login'))
 
-@login_required
 @app.route('/')
 @login_required
 def index():
@@ -988,7 +1290,7 @@ def index():
     min_year = request.args.get('min_year', type=int)
     max_year = request.args.get('max_year', type=int)
     min_price = request.args.get('min_price', type=float)
-    max_price = request.args.get('max_price', type=float)
+    max_price = request.args.get('max_price', type=float) or config.get('search_criteria', {}).get('max_price')
     min_mileage = request.args.get('min_mileage', type=int)
     max_mileage = request.args.get('max_mileage', type=int)
     max_distance = request.args.get('max_distance', type=float)
@@ -998,11 +1300,7 @@ def index():
     sort_by = request.args.get('sort_by', 'last_seen')
     
     # Build query
-    query = session.query(Car).filter(
-        Car.is_available == True,
-        # Distance filter: only show cars within 80km of Heerenveen (or cars without distance data)
-        or_(Car.distance_from_heerenveen_km <= 80, Car.distance_from_heerenveen_km.is_(None))
-    )
+    query = session.query(Car).filter(Car.is_available == True)
     
     # Apply filters
     if vehicle_type:
@@ -1035,6 +1333,9 @@ def index():
     # Apply odometer/mileage filter from config
     max_mileage = config['search']['max_mileage_km']
     query = query.filter(Car.mileage_km <= max_mileage)
+    # Apply distance filter from config
+    max_distance_km = config["search"]["location"]["radius_km"]
+    query = query.filter(Car.distance_from_heerenveen_km <= max_distance_km)
     
     # Apply sorting
     if sort_by == 'price_asc':
@@ -1092,24 +1393,40 @@ def index():
         car.battery_size = extract_battery_size(str(car.model))
         car.towing_range = calculate_towing_range(car, car.ev_db_range)
         
-        car.score, car.score_breakdown = calculate_car_score(car, config, return_breakdown=True)
+        car.score = calculate_car_score(car, config)
     
-    # Get statistics for sidebar
-    # Calculate statistics for sidebar
-    max_price = config.get('search_criteria', {}).get('max_price', 35000)
-    stats = {
-        'total_ever': session.query(Car).count(),
-        'total_available': session.query(Car).filter(Car.is_available == True).count(),
-        'within_budget': session.query(Car).filter(
-            Car.is_available == True,
-            Car.price <= max_price
-        ).count(),
-        'perfect_matches': session.query(Car).filter(
-            Car.is_available == True,
-            Car.has_all_required_features == True
-        ).count(),
-        'avg_price': session.query(func.avg(Car.price)).filter(Car.is_available == True).scalar() or 0
+    
+    # Get user requirements
+    user_reqs = {
+        "min_price": config.get("search_criteria", {}).get("min_price", 15000),
+        "max_price": config.get("search_criteria", {}).get("max_price", 35000),
+        "acceptable_year": config.get("search_criteria", {}).get("acceptable_year", 2020),
+        "max_mileage_acceptable": config.get("search_criteria", {}).get("max_mileage_acceptable", 100000)
     }
+
+    # Get statistics for sidebar - with base filters applied
+    # Base filters match what we apply in /api/cars
+    base_query = session.query(Car).filter(
+        Car.is_available == True,
+        Car.price >= user_reqs["min_price"],
+        Car.price <= user_reqs["max_price"],
+        Car.year >= user_reqs["acceptable_year"],
+        Car.mileage_km < user_reqs["max_mileage_acceptable"],
+        Car.fuel_type.in_(["Full Electric", "PHEV", "Hybrid"]),  # Only EV/PHEV/Hybrid
+        Car.distance_from_heerenveen_km <= 80,  # Max 80km
+        Car.dealer_name != "Basisgegevens",  # Exclude private sellers
+    )
+
+    stats = {
+        "total_ever": session.query(Car).count(),  # All cars in database
+        "total_available": base_query.count(),  # Cars matching base filters
+        "within_budget": base_query.filter(Car.price <= 35000).count(),  # Within budget
+        "perfect_matches": base_query.filter(
+            Car.has_all_required_features == True
+        ).count(),  # All required features
+        "avg_price": base_query.with_entities(func.avg(Car.price)).scalar() or 0,  # Average price
+    }
+
     # Get unique makes and models for filter dropdowns
     available_makes = session.query(Car.make).filter(Car.is_available == True).distinct().order_by(Car.make).all()
     available_makes = [m[0] for m in available_makes if m[0]]
@@ -1215,7 +1532,7 @@ def my_matches():
     min_year = request.args.get('min_year', type=int)
     max_year = request.args.get('max_year', type=int)
     min_price = request.args.get('min_price', type=float)
-    max_price = request.args.get('max_price', type=float)
+    max_price = request.args.get('max_price', type=float) or config.get('search_criteria', {}).get('max_price')
     min_mileage = request.args.get('min_mileage', type=int)
     max_mileage = request.args.get('max_mileage', type=int)
     max_distance = request.args.get('max_distance', type=float)
@@ -1255,8 +1572,8 @@ def my_matches():
         Car.year >= user_reqs['acceptable_year'],
         Car.mileage_km < user_reqs['max_mileage_acceptable'],
         Car.fuel_type.in_(['Full Electric', 'PHEV', 'Hybrid']),  # Only EV/PHEV/Hybrid
-        # Distance filter: only show cars within 80km of Heerenveen (or cars without distance data)
-        or_(Car.distance_from_heerenveen_km <= 80, Car.distance_from_heerenveen_km.is_(None))
+        Car.distance_from_heerenveen_km <= 80,  # Max 80km
+        Car.dealer_name != "Basisgegevens",
     )
     
     # Apply additional filters from request
@@ -1355,10 +1672,6 @@ def my_matches():
         
         # Check body style (prefer SUV/Station Wagon for family use)
         vehicle_type_str = str(car.vehicle_type).upper() if car.vehicle_type else ''
-        # Calculate score breakdown for tooltip
-        raw_score, score_breakdown = calculate_car_score(car, config, return_breakdown=True)
-        value_rating = convert_score_to_value_rating(raw_score)
-
         is_family_body_style = 'SUV' in vehicle_type_str or 'STATIONWAGON' in vehicle_type_str or 'STATION' in vehicle_type_str
         
         analyzed_cars.append({
@@ -1385,39 +1698,33 @@ def my_matches():
                 (20 if is_preferred_brand else 0) +  # Brand preference (increased boost)
                 (30 if is_preferred_model else 0) +  # Model preference (strong boost)
                 (5 if is_family_body_style else 0)  # SUV/Station Wagon preference
-            ),
-            'breakdown': score_breakdown,
-            'value_rating': value_rating
+            )
         })
     
     # Sort by match score (highest first), then by price (lowest first)
     analyzed_cars.sort(key=lambda x: (-x['match_score'], x['car'].price))
     
     # Split into three tiers based on critical features count
-    # Dynamic thresholds based on total number of critical features
-    # Perfect Matches: 100% (all features)
-    # Great Matches: 89-94% (missing 1-2 features)  
-    # Good Matches: 56-83% (missing 3-8 features)
+    # Tier 1: Perfect Matches (8/8 critical features)
+    # Tier 2: Great Matches (6-7/8 critical features)
+    # Tier 3: Good Matches (4-5/8 critical features)
+    # Below 4: Not shown (too many missing features)
     
     total_critical = len(config.get('critical_features', []))
     perfect_matches = []
     great_matches = []
     good_matches = []
     
-    # Calculate dynamic thresholds based on total features
-    great_threshold = max(total_critical - 2, int(total_critical * 0.89))  # At least 89% or all but 2
-    good_threshold = max(int(total_critical * 0.56), 10)  # At least 56% or minimum 10 features
-    
     for item in analyzed_cars:
         features_met = total_critical - item['missing_critical_count']
         
-        if item['dealbreakers_met']:  # All features present
+        if item['dealbreakers_met']:  # 8/8
             perfect_matches.append(item)
-        elif features_met >= great_threshold:  # Great matches (89-94%)
+        elif features_met >= 6:  # 6-7/8
             great_matches.append(item)
-        elif features_met >= good_threshold:  # Good matches (56%+)
+        elif features_met >= 4:  # 4-5/8
             good_matches.append(item)
-        # Cars below good_threshold are not shown
+        # Cars with fewer than 4 features are not shown
     
     # Get unique makes and models for filter dropdowns
     available_makes = session.query(Car.make).filter(Car.is_available == True).distinct().order_by(Car.make).all()
@@ -1431,24 +1738,15 @@ def my_matches():
         ).distinct().order_by(Car.model).all()
         available_models = [m[0] for m in available_models if m[0]]
     
-    # Calculate statistics for sidebar
-    max_price = config.get('search_criteria', {}).get('max_price', 35000)
-    stats = {
-        'total_ever': session.query(Car).count(),
-        'total_available': session.query(Car).filter(Car.is_available == True).count(),
-        'within_budget': session.query(Car).filter(
-            Car.is_available == True,
-            Car.price <= max_price
-        ).count(),
-        'perfect_matches': session.query(Car).filter(
-            Car.is_available == True,
-            Car.has_all_required_features == True
-        ).count(),
-        'avg_price': session.query(func.avg(Car.price)).filter(Car.is_available == True).scalar() or 0
-    }
     session.close()
     
-    return render_template('my_matches.html',
+    # DEBUG: Log what we are about to render
+    logger.info(f"MY-MATCHES DEBUG: perfect={len(perfect_matches)}, great={len(great_matches)}, good={len(good_matches)}")
+    for item in perfect_matches[:3]:  # Log first 3 perfect matches
+        car = item["car"]
+        logger.info(f"  Perfect match: ID={car.id}, {car.make} {car.model}, Available={car.is_available}, City={car.location_city}, Distance={car.distance_from_heerenveen_km}km")
+
+    response = make_response(render_template('my_matches.html',
                          perfect_matches=perfect_matches,
                          great_matches=great_matches,
                          good_matches=good_matches,
@@ -1457,21 +1755,85 @@ def my_matches():
                          config=config,
                          total_critical=total_critical,
                          available_makes=available_makes,
-                         available_models=available_models,
-                         stats=stats)
+                         available_models=available_models))
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
+
+
+def get_heerenveen_matches(session, fuel_type, config, limit=3):
+    """
+    Get top matches for Heerenveen with lenient filtering.
+    Only enforces: year >=2020, price <=€35,000, mileage <=150,000km, distance <=30km
+    Ignores: make/model preferences, storage capacity, doors/seats, family car requirements
+    """
+    # Build base query
+    query = session.query(Car).filter(
+        Car.is_available == True,
+        Car.fuel_type == fuel_type if fuel_type != 'PHEV/Hybrid' else Car.fuel_type.in_(['PHEV', 'Hybrid']),
+        Car.year >= 2020,
+        Car.price <= 35000,
+        Car.mileage_km <= 150000,
+        Car.distance_from_heerenveen_km <= 30
+    )
+    
+    all_cars = query.all()
+    
+    # Filter out only excluded vehicles (no family car requirements)
+    filtered_cars = [
+        car for car in all_cars 
+        if not should_exclude_vehicle(str(car.make or ''), str(car.model or ''))
+    ]
+    
+    # Score and sort cars
+    scored_cars = []
+    for car in filtered_cars:
+        # Load boot space if missing
+        if not car.storage_capacity_liters:
+            boot_data = get_boot_space(str(car.make), str(car.model))
+            if boot_data:
+                car.storage_capacity_liters = boot_data.get('normal', 0)
+        
+        # Add EV-Database range data for Full Electric
+        if fuel_type == 'Full Electric':
+            fuel_type_str = str(car.fuel_type) if car.fuel_type is not None else None
+            car.ev_db_range = get_ev_database_range(str(car.make), str(car.model), fuel_type_str)
+            car.wltp_range = get_wltp_range(str(car.make), str(car.model), fuel_type_str)
+            car.battery_size = extract_battery_size(str(car.model))
+            car.towing_range = calculate_towing_range(car, car.ev_db_range)
+        
+        # Use 20% distance weight to prioritize local cars
+        raw_score = calculate_car_score(car, config, distance_weight=0.20)
+        value_rating = convert_score_to_value_rating(raw_score)
+        critical_features = check_critical_features(car, config)
+        
+        scored_cars.append({
+            'car': car,
+            'score': raw_score,
+            'value_rating': value_rating,
+            'critical_features': critical_features,
+            'missing_critical': sum(1 for has_it in critical_features.values() if not has_it)
+        })
+    
+    # Sort by score (lower is better)
+    scored_cars.sort(key=lambda x: x['score'])
+    
+    # Get top matches
+    top_cars = [item['car'] for item in scored_cars[:limit]]
+    
+    # Add score and value_rating to car objects for display
+    for item in scored_cars[:limit]:
+        item['car'].score = item['score']
+        item['car'].value_rating = item['value_rating']
+    
+    return top_cars
 
 @app.route('/top-matches')
 @login_required
 def top_matches():
     """Show top 3 Full Electric and top 3 PHEV/Hybrid cars based on smart scoring (price, odometer, range, age)"""
-    print("=" * 80, flush=True)
-    print("TOP-MATCHES ROUTE CALLED", flush=True)
-    print(f"Request URL: {request.url}", flush=True)
-    print(f"Request args: {request.args}", flush=True)
-    print(f"Request headers: {dict(request.headers)}", flush=True)
-    print("=" * 80, flush=True)
-    
     session = db.get_session()
     
     # Get filter parameters from request
@@ -1482,22 +1844,17 @@ def top_matches():
     min_year = request.args.get('min_year', type=int)
     max_year = request.args.get('max_year', type=int)
     min_price = request.args.get('min_price', type=float)
-    max_price = request.args.get('max_price', type=float)
+    max_price = request.args.get('max_price', type=float) or config.get('search_criteria', {}).get('max_price')
     min_mileage = request.args.get('min_mileage', type=int)
     max_mileage = request.args.get('max_mileage', type=int)
     max_distance = request.args.get('max_distance', type=float)
     min_storage = request.args.get('min_storage', type=int)
     
-    print(f"Filter params - make:{make}, model:{model}, type:{vehicle_type}, fuel:{fuel_type}", flush=True)
-    print(f"Filter params - years:{min_year}-{max_year}, price:{min_price}-{max_price}", flush=True)
-    print(f"Filter params - mileage:{min_mileage}-{max_mileage}, distance:{max_distance}, storage:{min_storage}", flush=True)
-    
     # Build base query for Full Electric cars
     full_electric_query = session.query(Car).filter(
         Car.is_available == True,
         Car.fuel_type == 'Full Electric',
-        # Distance filter: only show cars within 80km of Heerenveen (or cars without distance data)
-        or_(Car.distance_from_heerenveen_km <= 80, Car.distance_from_heerenveen_km.is_(None))
+        Car.distance_from_heerenveen_km <= 80  # Max 80km
     )
     
     # Apply filters to Full Electric query
@@ -1525,8 +1882,6 @@ def top_matches():
         full_electric_query = full_electric_query.filter(Car.storage_capacity_liters >= min_storage)
     
     full_electric_all = full_electric_query.all()
-    print(f"=== FULL ELECTRIC FILTERING DEBUG ===", flush=True)
-    print(f"Initial query found: {len(full_electric_all)} Full Electric cars", flush=True)
     
     # Filter out excluded vehicles and apply family car size filters
     full_electric_filtered = [
@@ -1536,7 +1891,6 @@ def top_matches():
         and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
         and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 500)  # Min 500L boot when known
     ]
-    print(f"After family car filters (4+ doors, 5+ seats, 500L+ boot): {len(full_electric_filtered)} cars", flush=True)
     
     # Define preferred makes and models (same as my-matches page)
     preferred_makes = ['Skoda', 'Audi', 'Kia']
@@ -1566,7 +1920,7 @@ def top_matches():
         car.is_preferred = is_preferred_brand or is_preferred_model
         
         # Use higher distance weight for top-matches page to prioritize local cars (20% vs 10% default)
-        raw_score, score_breakdown = calculate_car_score(car, config, distance_weight=0.20, return_breakdown=True)
+        raw_score = calculate_car_score(car, config, distance_weight=0.20)
         value_rating = convert_score_to_value_rating(raw_score)
         critical_features = check_critical_features(car, config)
         full_electric_scored.append({
@@ -1574,8 +1928,7 @@ def top_matches():
             'score': raw_score,
             'value_rating': value_rating,
             'critical_features': critical_features,
-            'missing_critical': sum(1 for has_it in critical_features.values() if not has_it),
-            'breakdown': score_breakdown
+            'missing_critical': sum(1 for has_it in critical_features.values() if not has_it)
         })
     
     # Sort by score (lower is better)
@@ -1591,14 +1944,12 @@ def top_matches():
     for item in full_electric_scored[:3]:
         item['car'].score = item['score']
         item['car'].value_rating = item['value_rating']
-        item['car'].breakdown = item['breakdown']
     
     # Build base query for PHEV/Hybrid cars
     phev_query = session.query(Car).filter(
         Car.is_available == True,
         Car.fuel_type.in_(['PHEV', 'Hybrid']),
-        # Distance filter: only show cars within 80km of Heerenveen (or cars without distance data)
-        or_(Car.distance_from_heerenveen_km <= 80, Car.distance_from_heerenveen_km.is_(None))
+        Car.distance_from_heerenveen_km <= 80  # Max 80km
     )
     
     # Apply filters to PHEV query
@@ -1626,8 +1977,6 @@ def top_matches():
         phev_query = phev_query.filter(Car.storage_capacity_liters >= min_storage)
     
     phev_all = phev_query.all()
-    logger.info(f"=== PHEV/HYBRID FILTERING DEBUG ===")
-    logger.info(f"Initial query found: {len(phev_all)} PHEV/Hybrid cars")
     
     # Filter out excluded vehicles and apply family car size filters
     phev_filtered = [
@@ -1637,7 +1986,6 @@ def top_matches():
         and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
         and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 500)  # Min 500L boot when known
     ]
-    logger.info(f"After family car filters (4+ doors, 5+ seats, 500L+ boot): {len(phev_filtered)} cars")
     
     # Score and sort PHEV cars
     phev_scored = []
@@ -1654,7 +2002,7 @@ def top_matches():
         car.is_preferred = is_preferred_brand or is_preferred_model
         # Use higher distance weight for top-matches page to prioritize local cars (20% vs 10% default)
         
-        raw_score, score_breakdown = calculate_car_score(car, config, distance_weight=0.20, return_breakdown=True)
+        raw_score = calculate_car_score(car, config, distance_weight=0.20)
         value_rating = convert_score_to_value_rating(raw_score)
         critical_features = check_critical_features(car, config)
         phev_scored.append({
@@ -1662,8 +2010,7 @@ def top_matches():
             'score': raw_score,
             'value_rating': value_rating,
             'critical_features': critical_features,
-            'missing_critical': sum(1 for has_it in critical_features.values() if not has_it),
-            'breakdown': score_breakdown
+            'missing_critical': sum(1 for has_it in critical_features.values() if not has_it)
         })
     
     # Sort by score (lower is better)
@@ -1673,19 +2020,25 @@ def top_matches():
     for item in phev_scored[:3]:
         item['car'].score = item['score']
         item['car'].value_rating = item['value_rating']
-        item['car'].breakdown = item['breakdown']
     
     # Organize by fuel type for template
+
+    # Get Heerenveen matches (lenient filtering)
+    heerenveen_full_electric = get_heerenveen_matches(session, 'Full Electric', config, limit=3)
+    heerenveen_phev = get_heerenveen_matches(session, 'PHEV/Hybrid', config, limit=3)
+    
+    # Organize Heerenveen matches by fuel type
+    heerenveen_by_fuel = {}
+    if heerenveen_full_electric:
+        heerenveen_by_fuel['Full Electric'] = heerenveen_full_electric
+    if heerenveen_phev:
+        heerenveen_by_fuel['PHEV/Hybrid'] = heerenveen_phev
+    
     cars_by_fuel = {}
     if full_electric:
         cars_by_fuel['Full Electric'] = full_electric
     if phev:
         cars_by_fuel['PHEV/Hybrid'] = phev
-    
-    print(f"=== FINAL RESULTS ===", flush=True)
-    print(f"cars_by_fuel keys: {list(cars_by_fuel.keys())}", flush=True)
-    print(f"Full Electric cars: {len(cars_by_fuel.get('Full Electric', []))}", flush=True)
-    print(f"PHEV/Hybrid cars: {len(cars_by_fuel.get('PHEV/Hybrid', []))}", flush=True)
     
     # Get critical features info for all top matches
     critical_features_info = {}
@@ -1712,31 +2065,34 @@ def top_matches():
         'max_mileage_acceptable': config.get('search_criteria', {}).get('max_mileage_km', 100000)
     }
     
+    # DEBUG: Log what we are passing to template (BEFORE session.close())
+    logger.info("=== TEMPLATE DATA DEBUG ===")
+    logger.info(f"cars_by_fuel keys: {list(cars_by_fuel.keys())}")
+    logger.info(f"Total cars in cars_by_fuel: {sum(len(cars) for cars in cars_by_fuel.values())}")
+    for fuel_type, cars in cars_by_fuel.items():
+        logger.info(f"  {fuel_type}: {len(cars)} cars")
+        if len(cars) > 0:
+            for i, car in enumerate(cars[:3]):  # Log first 3 cars per fuel type
+                logger.info(f"    [{i+1}] {car.make} {car.model} (ID: {car.id})")
+    logger.info(f"heerenveen_by_fuel keys: {list(heerenveen_by_fuel.keys())}")
+    logger.info(f"Total cars in heerenveen_by_fuel: {sum(len(cars) for cars in heerenveen_by_fuel.values())}")
+    for fuel_type, cars in heerenveen_by_fuel.items():
+        logger.info(f"  {fuel_type}: {len(cars)} cars")
+        if len(cars) > 0:
+            for i, car in enumerate(cars[:3]):  # Log first 3 cars per fuel type
+                logger.info(f"    [{i+1}] {car.make} {car.model} (ID: {car.id})")
+    logger.info("=" * 80)
     
-    # Calculate statistics for sidebar
-    max_price = config.get('search_criteria', {}).get('max_price', 35000)
-    stats = {
-        'total_ever': session.query(Car).count(),
-        'total_available': session.query(Car).filter(Car.is_available == True).count(),
-        'within_budget': session.query(Car).filter(
-            Car.is_available == True,
-            Car.price <= max_price
-        ).count(),
-        'perfect_matches': session.query(Car).filter(
-            Car.is_available == True,
-            Car.has_all_required_features == True
-        ).count(),
-        'avg_price': session.query(func.avg(Car.price)).filter(Car.is_available == True).scalar() or 0
-    }
     session.close()
+    
     
     return render_template('top_matches.html', 
                           cars_by_fuel=cars_by_fuel,
+                          heerenveen_by_fuel=heerenveen_by_fuel,
                           critical_features_info=critical_features_info,
                           trade_in_value=TRADE_IN_VALUE,
                           config=config,
                           available_makes=available_makes,
-                          stats=stats,
                           available_models=available_models,
                           user_reqs=user_reqs)
 
@@ -1771,34 +2127,32 @@ def analytics():
             Car.price < max_p
         ).count()
         
-        # Cars matching specifications in this range (has all required features)
-        matching_specs_count = session.query(Car).filter(
+        # Preferred cars in this range - ONLY count specific preferred models
+        model_conditions = [Car.model.ilike(f'%{model}%') for model in preferred_models]
+        preferred_count = session.query(Car).filter(
             Car.is_available == True,
             Car.price >= min_p,
             Car.price < max_p,
-            Car.has_all_required_features == True
+            or_(*model_conditions)  # Only match the specific models
         ).count()
         
         price_distribution.append({
             'range': f"€{min_p//1000}k-{max_p//1000}k",
             'count': count
         })
-        preferred_counts.append(matching_specs_count)
+        preferred_counts.append(preferred_count)
     
-    # Find the range with most cars matching specifications
-    # Only highlight if there's a clear winner (no ties)
+    # Find the range(s) with most preferred cars
+    # Highlight all ranges that have the maximum count (including ties)
     max_preferred_count = max(preferred_counts) if preferred_counts else 0
-    count_of_max = preferred_counts.count(max_preferred_count) if max_preferred_count > 0 else 0
     
-    # Only set preferred_range_indices if there's a unique maximum (not a tie)
-    if max_preferred_count > 0 and count_of_max == 1:
-        preferred_range_index = preferred_counts.index(max_preferred_count)
-        preferred_range_indices = [preferred_range_index]  # Pass as list for template
+    # Get all indices that have the maximum count
+    if max_preferred_count > 0:
+        preferred_range_indices = [i for i, count in enumerate(preferred_counts) if count == max_preferred_count]
     else:
-        preferred_range_index = -1  # Don't highlight any range if there's a tie
-        preferred_range_indices = []  # Empty list means no highlighting
+        preferred_range_indices = []  # No preferred cars at all
     
-    logger.info(f"Cars matching specs by range: {preferred_counts}, max={max_preferred_count}, ties={count_of_max}, index={preferred_range_index}")
+    logger.info(f"Preferred counts by range: {preferred_counts}, max={max_preferred_count}, highlighted_indices={preferred_range_indices}")
     
     
     # Cars by source
@@ -1912,7 +2266,8 @@ def analytics():
     # Full Electric price distribution with individual prices
     ev_cars = session.query(Car).filter(
         Car.is_available == True,
-        Car.fuel_type == 'Full Electric'
+        Car.fuel_type == 'Full Electric',
+        Car.distance_from_heerenveen_km <= 80  # Max 80km
     ).order_by(Car.price.asc()).all()
     
     ev_price_data = []
@@ -1946,6 +2301,7 @@ def analytics():
                          phev_avg_price=phev_avg_price,
                          ev_price_data=ev_price_data,
                          ev_avg_price=ev_avg_price,
+                         smart_learning=get_enhanced_smart_learning_insights(session),
                          config=config)
 
 
@@ -1983,6 +2339,159 @@ def api_cars():
     
     return jsonify(cars_data)
 
+
+@app.route("/api/cars/filter")
+@login_required
+def api_cars_filter():
+    """AJAX API endpoint for filtered car listings with all index() filtering logic"""
+    session = db.get_session()
+    
+    try:
+        # Get filter parameters (same as index function)
+        vehicle_type = request.args.get("vehicle_type", "")
+        fuel_type = request.args.get("fuel_type", "")
+        make = request.args.get("make", "")
+        model = request.args.get("model", "")
+        min_year = request.args.get("min_year", type=int)
+        max_year = request.args.get("max_year", type=int)
+        min_price = request.args.get("min_price", type=float)
+        max_price = request.args.get("max_price", type=float) or config.get("search_criteria", {}).get("max_price")
+        min_mileage = request.args.get("min_mileage", type=int)
+        max_mileage = request.args.get("max_mileage", type=int)
+        max_distance = request.args.get("max_distance", type=float)
+        min_storage = request.args.get("min_storage", type=int)
+        only_complete = request.args.get("only_complete", type=bool, default=False)
+        required_features = request.args.getlist("required_features")
+        sort_by = request.args.get("sort_by", "last_seen")
+        
+        # Build query (same logic as index function)
+        query = session.query(Car).filter(Car.is_available == True)
+        
+        # Apply filters
+        if vehicle_type:
+            query = query.filter(Car.vehicle_type == vehicle_type)
+        if fuel_type:
+            query = query.filter(Car.fuel_type == fuel_type)
+        if make:
+            query = query.filter(Car.make == make)
+        if model:
+            query = query.filter(Car.model == model)
+        if min_year:
+            query = query.filter(Car.year >= min_year)
+        if max_year:
+            query = query.filter(Car.year <= max_year)
+        if min_price:
+            query = query.filter(Car.price >= min_price)
+        if max_price:
+            query = query.filter(Car.price <= max_price)
+        if min_mileage:
+            query = query.filter(Car.mileage_km >= min_mileage)
+        if max_mileage:
+            query = query.filter(Car.mileage_km <= max_mileage)
+        if max_distance:
+            query = query.filter(Car.distance_from_heerenveen_km <= max_distance)
+        if min_storage:
+            query = query.filter(Car.storage_capacity_liters >= min_storage)
+        if only_complete:
+            query = query.filter(Car.has_all_required_features == True)
+        
+        # Apply config-based filters (same as index function)
+        max_mileage_config = config["search"]["max_mileage_km"]
+        query = query.filter(Car.mileage_km <= max_mileage_config)
+        max_distance_km = config["search"]["location"]["radius_km"]
+        query = query.filter(Car.distance_from_heerenveen_km <= max_distance_km)
+        
+        # Apply sorting
+        if sort_by == "price_asc":
+            query = query.order_by(Car.price.asc())
+        elif sort_by == "price_desc":
+            query = query.order_by(Car.price.desc())
+        elif sort_by == "distance":
+            query = query.order_by(Car.distance_from_heerenveen_km.asc())
+        elif sort_by == "features":
+            query = query.order_by(Car.features_count.desc())
+        else:  # last_seen
+            query = query.order_by(Car.last_seen.desc())
+        
+        # Get all matching cars, then filter out excluded vehicles (same as index function)
+        all_cars = query.all()
+        filtered_cars = [
+            car for car in all_cars 
+            if not should_exclude_vehicle(str(car.make or ""), str(car.model or ""))
+            and (car.doors is None or car.doors >= 4)  # Require 4+ doors (or unknown)
+            and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
+        ]
+        
+        # Filter by required features if specified (same as index function)
+        if required_features:
+            def car_has_required_features(car):
+                """Check if car has all user-selected required features"""
+                car_features = car.features if car.features else []
+                # Normalize for case-insensitive matching
+                car_features_lower = [f.lower() for f in car_features]
+                for required_feature in required_features:
+                    if required_feature.lower() not in car_features_lower:
+                        return False
+                return True
+            
+            filtered_cars = [car for car in filtered_cars if car_has_required_features(car)]
+        
+        # Convert to JSON-serializable format
+        cars_data = []
+        for car in filtered_cars:
+            car_dict = {
+                "id": car.id,
+                "make": car.make,
+                "model": car.model,
+                "year": car.year,
+                "fuel_type": car.fuel_type,
+                "vehicle_type": car.vehicle_type,
+                "price": car.price,
+                "mileage_km": car.mileage_km,
+                "location_city": car.location_city,
+                "distance_from_heerenveen_km": car.distance_from_heerenveen_km,
+                "source": car.source_website,
+                "url": car.listing_url,
+                "total_score": getattr(car, "score", 0),
+                "last_seen": car.last_seen.isoformat() if car.last_seen else None,
+                "features": car.features or []
+            }
+            cars_data.append(car_dict)
+        
+        # Get available models based on current make selection for dynamic dropdown update
+        available_models = []
+        if make:
+            models_query = session.query(Car.model).filter(
+                Car.is_available == True,
+                Car.make == make,
+                Car.distance_from_heerenveen_km <= max_distance_km
+            ).distinct().order_by(Car.model)
+            available_models = [row[0] for row in models_query.all() if row[0]]
+        
+        response_data = {
+            "cars": cars_data,
+            "total_count": len(filtered_cars),
+            "available_models": available_models,
+            "filters_applied": {
+                "vehicle_type": vehicle_type,
+                "fuel_type": fuel_type,
+                "make": make,
+                "model": model,
+                "required_features": required_features,
+                "sort_by": sort_by
+            }
+        }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        print(f"Error in API cars filter: {e}")
+        return jsonify({
+            "error": "An error occurred while filtering cars",
+            "message": str(e)
+        }), 500
+    finally:
+        session.close()
 
 @app.route('/api/stats')
 @login_required
@@ -2066,6 +2575,7 @@ def unavailable_cars():
 
 @app.route('/admin')
 @login_required
+@admin_required
 def admin():
     """Admin panel for scraper management"""
     session = db.get_session()
@@ -2197,6 +2707,7 @@ def trigger_scrape():
 
 @app.route('/api/trigger-availability-check', methods=['POST'])
 @login_required
+@admin_required
 def trigger_availability_check():
     """Manually trigger availability check"""
     try:
@@ -2232,11 +2743,12 @@ def trigger_availability_check():
 
 @app.route('/api/scraper-logs', methods=['GET'])
 @login_required
+@admin_required
 def get_scraper_logs():
     """Get recent scraper log entries"""
     try:
         import os
-        log_file = '/tmp/flask_app.log'
+        log_file = '/app/logs/scraper.log'
         
         # Check if log file exists
         if not os.path.exists(log_file):
@@ -2497,6 +3009,7 @@ def delete_exclusion(exclusion_id):
 
 @app.route('/api/availability-history')
 @login_required
+@admin_required
 def api_availability_history():
     """API endpoint for availability check history"""
     try:
@@ -2544,6 +3057,7 @@ def api_availability_history():
 
 @app.route('/api/scraper-statistics')
 @login_required
+@admin_required
 def api_scraper_statistics():
     """API endpoint for scraper statistics per website"""
     try:
@@ -2614,6 +3128,7 @@ def api_scraper_statistics():
 
 @app.route('/api/scraper-trends')
 @login_required
+@admin_required
 def get_scraper_trends():
     """Get scraper performance trends over the last 30 days"""
     try:
@@ -2705,6 +3220,7 @@ def get_scraper_trends():
 
 @app.route('/api/scheduler-status')
 @login_required
+@admin_required
 def get_scheduler_status():
     """Get current scheduler configuration and status"""
     try:
@@ -2775,6 +3291,7 @@ def get_scheduler_status():
 
 @app.route('/api/scheduler-update', methods=['POST'])
 @login_required
+@admin_required
 def update_scheduler_config():
     """Update scheduler configuration in config.yaml"""
     try:
@@ -2845,6 +3362,103 @@ def update_scheduler_config():
             'message': str(e)
         }), 500
 
+
+@app.route("/config", methods=["GET"])
+@login_required
+def get_config():
+    """Get current configuration including availability checker settings"""
+    try:
+        # Get availability checker config from memory
+        availability_config = config.get("availability_checker", {})
+        
+        # Convert hours to minutes for the frontend
+        check_interval_hours = availability_config.get("check_interval_hours", 0.25)  # Default 15 minutes
+        check_interval_minutes = int(check_interval_hours * 60)
+        min_features_required = availability_config.get("min_features_required", 3)
+        
+        return jsonify({
+            "status": "success",
+            "availability_checker": {
+                "check_interval_hours": check_interval_hours,
+                "min_features_required": min_features_required
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error getting config: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+@app.route("/api/availability-config", methods=["POST"])
+@login_required
+@admin_required
+def update_availability_config():
+    """Update availability checker configuration in config.yaml"""
+    try:
+        data = request.json
+        
+        # Validate input
+        if "check_interval_minutes" not in data or "min_features_required" not in data:
+            return jsonify({
+                "status": "error",
+                "message": "Missing required fields: check_interval_minutes, min_features_required"
+            }), 400
+        
+        check_interval = int(data["check_interval_minutes"])
+        min_features = int(data["min_features_required"])
+        
+        # Validate values
+        if check_interval < 1 or check_interval > 1440:
+            return jsonify({
+                "status": "error",
+                "message": "Check interval must be between 1 and 1440 minutes"
+            }), 400
+            
+        if min_features < 0 or min_features > 10:
+            return jsonify({
+                "status": "error",
+                "message": "Minimum features must be between 0 and 10"
+            }), 400
+        
+        # Load current config
+        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml")
+        with open(config_path, "r") as f:
+            current_config = yaml.safe_load(f)
+        
+        # Update availability checker settings
+        if "availability_checker" not in current_config:
+            current_config["availability_checker"] = {}
+        
+        # Convert minutes to hours for storage (config uses hours)
+        check_interval_hours = check_interval / 60.0
+        
+        current_config["availability_checker"]["check_interval_hours"] = check_interval_hours
+        current_config["availability_checker"]["min_features_required"] = min_features
+        
+        # Write updated config back to file
+        with open(config_path, "w") as f:
+            yaml.dump(current_config, f, default_flow_style=False, sort_keys=False)
+        
+        # Reload config in memory
+        global config
+        config = current_config
+        
+        return jsonify({
+            "status": "success",
+            "message": "Availability configuration updated successfully",
+            "config": {
+                "check_interval_hours": check_interval_hours,
+                "min_features_required": min_features
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error updating availability config: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 @app.route('/api/critical-features', methods=['GET'])
 @login_required
@@ -3243,8 +3857,8 @@ def calculate_depreciation():
             'mileage_km': current_car.mileage_km,
             'average_km_per_year': current_car.average_km_per_year,
             'year': current_car.year,  # Add manufacture year for accurate age calculation
-            'purchase_mileage_km': current_car.purchase_mileage_km,
-            'estimated_new_price': current_car.estimated_new_price
+            'purchase_mileage_km': current_car.purchase_mileage_km,  # Add purchase mileage for accurate km/year
+            'estimated_new_price': current_car.estimated_new_price  # Add estimated new price for trade-in calculation
         }
         
         # Calculate depreciation
@@ -3264,7 +3878,7 @@ def calculate_depreciation():
                 'year': current_car.year,
                 'license_plate': current_car.license_plate,
                 'purchase_price': current_car.initial_purchase_price,
-                'estimated_new_price': current_car.estimated_new_price or current_car.initial_purchase_price,
+                'estimated_new_price': current_car.estimated_new_price,
                 'purchase_date': current_car.purchase_date.isoformat() if current_car.purchase_date else None,
                 'current_mileage': current_car.mileage_km
             },
@@ -3278,6 +3892,7 @@ def calculate_depreciation():
 
 @app.route('/api/scraper-service/status', methods=['GET'])
 @login_required
+@admin_required
 def get_scraper_service_status():
     """Get the status of the scraper Docker container"""
     try:
@@ -3346,6 +3961,7 @@ def get_scraper_service_status():
 
 @app.route('/api/scraper-service/control', methods=['POST'])
 @login_required
+@admin_required
 def control_scraper_service():
     """Start or stop the scraper Docker container"""
     try:
@@ -3469,6 +4085,347 @@ def control_scraper_service():
         }), 500
 
 
+# ============================================================================
+# USER MANAGEMENT ROUTES
+# ============================================================================
+
+@app.route('/api/users', methods=['GET'])
+@login_required
+def get_users():
+    """Get all users (admin only)"""
+    # Check if current user is admin
+    current_username = current_user.username
+    session = db.get_session()
+    try:
+        requesting_user = session.query(User).filter_by(username=current_username).first()
+        if not requesting_user or not requesting_user.is_admin:
+            return jsonify({'status': 'error', 'message': 'Admin access required'}), 403
+        
+        users = session.query(User).order_by(User.created_at.desc()).all()
+        users_data = [{
+            'id': u.id,
+            'username': u.username,
+            'is_admin': u.is_admin,
+            'is_active': u.is_active,
+            'created_at': u.created_at.isoformat() if u.created_at else None,
+            'last_login': u.last_login.isoformat() if u.last_login else None
+        } for u in users]
+        
+        return jsonify({'status': 'success', 'users': users_data})
+    except Exception as e:
+        logger.error(f"Error fetching users: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        session.close()
+
+
+@app.route('/api/users/<int:user_id>', methods=['GET'])
+@login_required
+def get_user(user_id):
+    """Get a single user by ID (admin only)"""
+    # Check if current user is admin
+    current_username = current_user.username
+    session = db.get_session()
+    try:
+        requesting_user = session.query(User).filter_by(username=current_username).first()
+        if not requesting_user or not requesting_user.is_admin:
+            return jsonify({'status': 'error', 'message': 'Admin access required'}), 403
+        
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            return jsonify({'status': 'error', 'message': 'User not found'}), 404
+        
+        user_data = {
+            'id': user.id,
+            'username': user.username,
+            'is_admin': user.is_admin,
+            'is_active': user.is_active,
+            'created_at': user.created_at.isoformat() if user.created_at else None,
+            'last_login': user.last_login.isoformat() if user.last_login else None
+        }
+        
+        return jsonify({'status': 'success', 'user': user_data})
+    except Exception as e:
+        logger.error(f"Error fetching user: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        session.close()
+
+
+@app.route('/api/users', methods=['POST'])
+@login_required
+def create_user():
+    """Create a new user (admin only)"""
+    # Check if current user is admin
+    current_username = current_user.username
+    session = db.get_session()
+    try:
+        requesting_user = session.query(User).filter_by(username=current_username).first()
+        if not requesting_user or not requesting_user.is_admin:
+            return jsonify({'status': 'error', 'message': 'Admin access required'}), 403
+        
+        data = request.get_json()
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        is_admin = data.get('is_admin', False)
+        
+        # Validate input
+        if not username or len(username) < 3:
+            return jsonify({'status': 'error', 'message': 'Username must be at least 3 characters'}), 400
+        if not password or len(password) < 6:
+            return jsonify({'status': 'error', 'message': 'Password must be at least 6 characters'}), 400
+        
+        # Check if username already exists
+        existing_user = session.query(User).filter_by(username=username).first()
+        if existing_user:
+            return jsonify({'status': 'error', 'message': 'Username already exists'}), 400
+        
+        # Create new user
+        new_user = User(
+            username=username,
+            password_hash=generate_password_hash(password),
+            is_admin=is_admin,
+            is_active=True,
+            created_at=datetime.utcnow()
+        )
+        session.add(new_user)
+        session.commit()
+        
+        logger.info(f"User created: {username} (admin={is_admin}) by {current_username}")
+        return jsonify({
+            'status': 'success',
+            'message': f'User {username} created successfully',
+            'user': {
+                'id': new_user.id,
+                'username': new_user.username,
+                'is_admin': new_user.is_admin,
+                'is_active': new_user.is_active
+            }
+        })
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error creating user: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        session.close()
+
+
+@app.route('/api/users/<int:user_id>', methods=['PUT'])
+@login_required
+def update_user(user_id):
+    """Update a user (admin only)"""
+    current_username = current_user.username
+    session = db.get_session()
+    try:
+        requesting_user = session.query(User).filter_by(username=current_username).first()
+        if not requesting_user or not requesting_user.is_admin:
+            return jsonify({'status': 'error', 'message': 'Admin access required'}), 403
+        
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            return jsonify({'status': 'error', 'message': 'User not found'}), 404
+        
+        data = request.get_json()
+        
+        # Update password if provided
+        if 'password' in data and data['password'].strip():
+            password = data['password'].strip()
+            if len(password) < 6:
+                return jsonify({'status': 'error', 'message': 'Password must be at least 6 characters'}), 400
+            user.password_hash = generate_password_hash(password)
+        
+        # Update admin status
+        if 'is_admin' in data:
+            user.is_admin = data['is_admin']
+        
+        # Update active status
+        if 'is_active' in data:
+            user.is_active = data['is_active']
+        
+        session.commit()
+        logger.info(f"User updated: {user.username} by {current_username}")
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'User {user.username} updated successfully',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'is_admin': user.is_admin,
+                'is_active': user.is_active
+            }
+        })
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error updating user: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        session.close()
+
+
+@app.route('/api/users/<int:user_id>', methods=['DELETE'])
+@login_required
+def delete_user(user_id):
+    """Delete a user (admin only)"""
+    current_username = current_user.username
+    session = db.get_session()
+    try:
+        requesting_user = session.query(User).filter_by(username=current_username).first()
+        if not requesting_user or not requesting_user.is_admin:
+            return jsonify({'status': 'error', 'message': 'Admin access required'}), 403
+        
+        # Prevent deleting yourself
+        if current_user.id == user_id:
+            return jsonify({'status': 'error', 'message': 'Cannot delete your own account'}), 400
+        
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            return jsonify({'status': 'error', 'message': 'User not found'}), 404
+        
+        username = user.username
+        session.delete(user)
+        session.commit()
+        
+        logger.info(f"User deleted: {username} by {current_username}")
+        return jsonify({'status': 'success', 'message': f'User {username} deleted successfully'})
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error deleting user: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        session.close()
+
+
+
+
+# ===== USER FEEDBACK & SMART LEARNING API =====
+
+@app.route('/api/feedback', methods=['POST'])
+@login_required
+def submit_feedback():
+    """Submit user feedback (like/dislike) for a car"""
+    try:
+        data = request.get_json()
+        car_id = data.get('car_id')
+        feedback_type = data.get('feedback_type')  # 'like' or 'dislike'
+        
+        if not car_id or feedback_type not in ['like', 'dislike']:
+            return jsonify({'error': 'Invalid feedback data'}), 400
+        
+        user_id = current_user.id
+        session_id = data.get("session_id", str(uuid.uuid4()))
+        ip_address = request.environ.get('REMOTE_ADDR', 'unknown')
+        user_agent = request.headers.get('User-Agent', '')
+        
+        with db.Session() as db_session:
+            # Check if this user already rated this specific car
+            existing_feedback = db_session.execute(text("""
+                SELECT feedback_type FROM user_feedback 
+                WHERE user_id = :user_id AND car_id = :car_id
+                ORDER BY created_at DESC LIMIT 1
+            """), {'user_id': user_id, 'car_id': car_id}).fetchone()
+            
+            if existing_feedback:
+                existing_type = existing_feedback[0]
+                
+                if existing_type == feedback_type:
+                    # Same feedback type - inform user it was already rated
+                    return jsonify({
+                        'status': 'already_rated',
+                        'message': f'You already {feedback_type}d this car',
+                        'current_feedback': existing_type
+                    })
+                else:
+                    # Different feedback type - update existing
+                    db_session.execute(text("""
+                        UPDATE user_feedback 
+                        SET feedback_type = :feedback_type, created_at = CURRENT_TIMESTAMP
+                        WHERE user_id = :user_id AND car_id = :car_id
+                    """), {
+                        'user_id': user_id,
+                        'car_id': car_id,
+                        'feedback_type': feedback_type
+                    })
+                    db_session.commit()
+                    
+                    return jsonify({
+                        'status': 'updated',
+                        'message': f'Changed from {existing_type} to {feedback_type}',
+                        'previous_feedback': existing_type,
+                        'new_feedback': feedback_type
+                    })
+            else:
+                # New feedback - insert
+                db_session.execute(text("""
+                    INSERT INTO user_feedback 
+                    (car_id, feedback_type, user_id, session_id, ip_address, user_agent)
+                    VALUES (:car_id, :feedback_type, :user_id, :session_id, :ip_address, :user_agent)
+                """), {
+                    'car_id': car_id,
+                    'feedback_type': feedback_type,
+                    'user_id': user_id,
+                    'session_id': session_id,
+                    'ip_address': ip_address,
+                    'user_agent': user_agent
+                })
+                db_session.commit()
+                
+                return jsonify({
+                    'status': 'success',
+                    'message': f'Successfully {feedback_type}d this car',
+                    'feedback_type': feedback_type
+                })
+        
+        logger.info(f'User {user_id} feedback: {feedback_type} for car {car_id}')
+        
+    except Exception as e:
+        logger.error(f'Error submitting feedback: {e}')
+        return jsonify({'error': 'Internal server error'}), 500
+
+
+    except Exception as e:
+        logger.error(f'Error submitting feedback: {e}')
+        return jsonify({'error': 'Internal server error'}), 500
+
+
+@app.route('/api/track-interaction', methods=['POST'])  
+def track_interaction():
+    """Track user interaction with a car listing"""
+    try:
+        data = request.get_json()
+        car_id = data.get('car_id')
+        interaction_type = data.get('interaction_type')
+        interaction_data = data.get('data', {})
+        
+        if not car_id or not interaction_type:
+            return jsonify({'error': 'Invalid interaction data'}), 400
+        
+        session_id = data.get("session_id", str(uuid.uuid4()))
+        ip_address = request.environ.get('REMOTE_ADDR', 'unknown')
+        user_agent = request.headers.get('User-Agent', '')
+        
+        with db.Session() as db_session:
+            db_session.execute(text("""
+                INSERT INTO user_interactions 
+                (car_id, interaction_type, interaction_data, session_id, ip_address, user_agent)
+                VALUES (:car_id, :interaction_type, :interaction_data, :session_id, :ip_address, :user_agent)
+            """), {
+                'car_id': car_id,
+                'interaction_type': interaction_type,
+                'interaction_data': json.dumps(interaction_data),
+                'session_id': session_id,
+                'ip_address': ip_address,
+                'user_agent': user_agent
+            })
+            db_session.commit()
+        
+        return jsonify({'status': 'success'})
+        
+    except Exception as e:
+        logger.error(f'Error tracking interaction: {e}')
+        return jsonify({'error': 'Internal server error'}), 500
+
+
 @app.template_filter('format_price')
 def format_price(price):
     """Template filter for formatting prices"""
@@ -3501,128 +4458,221 @@ def format_datetime(dt):
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
-@app.route("/admin/init-database", methods=["POST"])
-@login_required
-def init_database():
-    """Initialize database with current car data - one time use"""
-    from models.database import CurrentCar
+
+# DEBUG: List all registered routes
+print("\n" + "="*80)
+logger.info("DEBUG: All registered routes:")
+for rule in app.url_map.iter_rules():
+    print(f"  {rule.rule} -> {rule.endpoint} [{','.join(rule.methods)}]")
+print("="*80 + "\n")
+
+@app.route('/api/scoring-analysis')
+def api_scoring_analysis():
+    """API endpoint for detailed scoring analysis"""
     session = db.get_session()
     
     try:
-        # Check if already initialized
-        existing_car = session.query(CurrentCar).first()
-        if existing_car:
-            return jsonify({"status": "already_initialized", "message": "Database already has current car data"})
+        # Get available cars with their scores
+        available_cars = session.query(Car).filter(Car.is_available == True).all()
         
-        # Add current car
-        current_car = CurrentCar(
-            license_plate="SX-515-N",
-            make="OPEL",
-            model="ASTRA SPORTS TOURER+",
-            year=2018,
-            mileage_km=151000,
-            fuel_type="Benzine",
-            body_type="Personenauto",
-            color="GRIJS",
-            rdw_data={},
-            purchase_price=16750.0,
-            purchase_date=datetime(2022, 1, 15),
-            target_sale_value=14000,
-            purchase_mileage_km=74751,
-            estimated_new_price=29838.0
-        )
-        session.add(current_car)
-        session.commit()
+        analysis_data = []
+        phev_cars = []
+        
+        for car in available_cars[:150]:  # Limit to 50 for performance
+            # Calculate score with breakdown
+            score = calculate_car_score(car, config)
+            
+            # Get detailed scoring breakdown
+            breakdown = get_scoring_breakdown(car, config)
+            
+            car_data = {
+                'id': car.id,
+                'make': car.make,
+                'model': car.model,
+                'year': car.year,
+                'fuel_type': car.fuel_type,
+                'price': car.price,
+                'score': round(score, 1),
+                'value_rating': convert_score_to_value_rating(score),
+                'breakdown': breakdown
+            }
+            
+            analysis_data.append(car_data)
+            
+            # Collect PHEV cars for separate analysis
+            if car.fuel_type == 'PHEV':
+                phev_cars.append(car_data)
+        
+        # Sort by score (best first)
+        analysis_data.sort(key=lambda x: x['score'])
+        phev_cars.sort(key=lambda x: x['score'])
         
         return jsonify({
-            "status": "success",
-            "message": "Database initialized with current car data",
-            "car": "SX-515-N"
+            'total_cars': len(analysis_data),
+            'phev_count': len(phev_cars),
+            'top_cars': analysis_data[:10],
+            'top_phevs': phev_cars[:10],
+            'all_cars': analysis_data
         })
-            
+        
     except Exception as e:
-        session.rollback()
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logger.error(f"Error in scoring analysis API: {str(e)}")
+        return jsonify({'error': str(e)}), 500
     finally:
         session.close()
 
 
-
-@app.route("/admin/import-sql/<token>", methods=["POST"])
-def import_sql_dump(token):
-    """Import SQL dump to populate database"""
-    import os
-    import sqlite3
-    
-    # Check token
-    valid_token = os.environ.get("INIT_DB_TOKEN", "init-railway-db-2024")
-    if token != valid_token:
-        return jsonify({"status": "error", "message": "Invalid token"}), 403
+@app.route('/api/phev-analysis')
+def api_phev_analysis():
+    """API endpoint for PHEV-specific analysis"""
+    session = db.get_session()
     
     try:
-        # Get SQL from request body
-        sql_dump = request.get_data(as_text=True)
+        phev_cars = session.query(Car).filter(
+            Car.is_available == True,
+            Car.fuel_type == 'PHEV'
+        ).all()
         
-        if not sql_dump:
-            return jsonify({"status": "error", "message": "No SQL data provided"}), 400
+        phev_analysis = []
+        bonus_distribution = {
+            'TOP_TIER': [],     # Hyundai Tucson PHEV & Kia Sportage PHEV
+            'PROVEN_TIER': [],  # Mitsubishi Outlander PHEV  
+            'PREMIUM_TIER': [], # BMW X1 PHEV & Volvo XC40 T5 Recharge
+            'STANDARD': []      # Other PHEVs
+        }
         
-        # Connect directly to SQLite
-        db_path = config["database"]["path"]
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        for car in phev_cars:
+            score = calculate_car_score(car, config)
+            breakdown = get_scoring_breakdown(car, config)
+            
+            car_data = {
+                'id': car.id,
+                'make': car.make,
+                'model': car.model,
+                'year': car.year,
+                'price': car.price,
+                'score': round(score, 1),
+                'value_rating': convert_score_to_value_rating(score),
+                'electric_range_km': car.electric_range_km,
+                'breakdown': breakdown
+            }
+            
+            # Categorize by PHEV towing bonus tier
+            model_lower = str(car.model).lower()
+            if 'tucson' in model_lower or 'sportage' in model_lower:
+                bonus_distribution['TOP_TIER'].append(car_data)
+            elif 'outlander' in model_lower:
+                bonus_distribution['PROVEN_TIER'].append(car_data)
+            elif 'x1' in model_lower or 'xc40' in model_lower:
+                bonus_distribution['PREMIUM_TIER'].append(car_data)
+            else:
+                bonus_distribution['STANDARD'].append(car_data)
+            
+            phev_analysis.append(car_data)
         
-        # Execute SQL dump
-        cursor.executescript(sql_dump)
-        conn.commit()
-        conn.close()
+        # Sort each tier by score
+        for tier in bonus_distribution:
+            bonus_distribution[tier].sort(key=lambda x: x['score'])
         
         return jsonify({
-            "status": "success",
-            "message": "Database imported successfully",
-            "lines": len(sql_dump.split(chr(10)))
+            'total_phevs': len(phev_analysis),
+            'bonus_tiers': bonus_distribution,
+            'tier_counts': {tier: len(cars) for tier, cars in bonus_distribution.items()},
+            'all_phevs': sorted(phev_analysis, key=lambda x: x['score'])
         })
-            
+        
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logger.error(f"Error in PHEV analysis API: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 
 
-
-@app.route("/admin/reset-database/<token>", methods=["POST"])
-def reset_database(token):
-    """Reset database - delete all tables"""
-    import os
-    import sqlite3
+def get_scoring_breakdown(car, config):
+    """Get detailed breakdown of how a car's score is calculated"""
+    breakdown = {
+        'features': {'score': 0, 'details': {}},
+        'price': {'score': 0, 'details': {}},
+        'bonuses': {'total': 0, 'details': []},
+        'penalties': {'total': 0, 'details': []}
+    }
     
-    # Check token
-    valid_token = os.environ.get("INIT_DB_TOKEN", "init-railway-db-2024")
-    if token != valid_token:
-        return jsonify({"status": "error", "message": "Invalid token"}), 403
+    # Features breakdown
+    critical_features = check_critical_features(car, config)
+    if critical_features:
+        missing_critical = sum(1 for has_it in critical_features.values() if not has_it)
+        total_critical = len(critical_features)
+        features_score = (missing_critical / total_critical) * 100 * 0.45
+        
+        breakdown['features'] = {
+            'score': round(features_score, 1),
+            'details': {
+                'missing_features': missing_critical,
+                'total_features': total_critical,
+                'percentage_missing': round((missing_critical / total_critical) * 100, 1)
+            }
+        }
     
-    try:
-        # Connect directly to SQLite
-        db_path = config["database"]["path"]
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+    # Price breakdown
+    if car.price:
+        max_price = 50000
+        price_score = min((car.price / max_price) * 100, 100) * 0.20
+        breakdown['price'] = {
+            'score': round(price_score, 1),
+            'details': {
+                'actual_price': car.price,
+                'max_price': max_price,
+                'price_ratio': round((car.price / max_price) * 100, 1)
+            }
+        }
+    
+    # Bonus analysis
+    bonuses = []
+    
+    # PHEV bonus
+    if car.fuel_type == 'PHEV':
+        bonuses.append({'name': 'PHEV Preference', 'value': -8, 'reason': 'Best of both worlds for family use'})
         
-        # Get all tables
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = cursor.fetchall()
+        # PHEV towing efficiency bonuses
+        model_lower = str(car.model).lower() if car.model else ''
+        if 'tucson' in model_lower or 'sportage' in model_lower:
+            bonuses.append({'name': 'TOP TIER Towing', 'value': -8, 'reason': 'Excellent towing efficiency'})
+        elif 'outlander' in model_lower:
+            bonuses.append({'name': 'PROVEN TIER Towing', 'value': -6, 'reason': 'Established towing platform'})
+        elif 'x1' in model_lower or 'xc40' in model_lower:
+            bonuses.append({'name': 'PREMIUM TIER Towing', 'value': -4, 'reason': 'Quality build for towing'})
+    
+    # Vehicle type bonuses
+    is_suv = any(keyword in str(car.vehicle_type).lower() for keyword in ['suv', 'crossover']) if car.vehicle_type else False
+    is_stationwagon = 'station wagon' in str(car.vehicle_type).lower() if car.vehicle_type else False
+    
+    if is_suv or is_stationwagon:
+        bonuses.append({'name': 'Family Vehicle', 'value': -5, 'reason': 'Larger family-friendly vehicle'})
+    
+    if is_suv:
+        bonuses.append({'name': 'SUV Seating', 'value': -3, 'reason': 'Higher seating position'})
+    
+    # Preferred cars bonus
+    preferred_config = config.get('preferred_cars', {})
+    if preferred_config:
+        preferred_makes = [m.lower() for m in preferred_config.get('makes', [])]
+        preferred_models = [m.lower() for m in preferred_config.get('models', [])]
         
-        # Drop all tables
-        for table in tables:
-            cursor.execute(f"DROP TABLE IF EXISTS {table[0]}")
+        car_make_lower = str(car.make).lower() if car.make else ''
+        car_model_lower = str(car.model).lower() if car.model else ''
         
-        conn.commit()
-        conn.close()
+        is_preferred = (any(pm in car_make_lower for pm in preferred_makes) or 
+                       any(pm in car_model_lower for pm in preferred_models))
         
-        return jsonify({
-            "status": "success",
-            "message": f"Dropped {len(tables)} tables",
-            "tables": [t[0] for t in tables]
-        })
-            
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        if is_preferred:
+            bonuses.append({'name': 'Preferred Brand/Model', 'value': -15, 'reason': 'Matches preferred configuration'})
+    
+    breakdown['bonuses'] = {
+        'total': sum(b['value'] for b in bonuses),
+        'details': bonuses
+    }
+    
+    return breakdown
 
 
 if __name__ == '__main__':
@@ -3634,56 +4684,3 @@ if __name__ == '__main__':
         debug=config['dashboard']['debug'],
         threaded=True
     )
-@app.route("/admin/init-database-token/<token>", methods=["GET"])
-def init_database_with_token(token):
-    """Initialize database with token - no login required"""
-    import os
-    
-    # Check token
-    valid_token = os.environ.get("INIT_DB_TOKEN", "init-railway-db-2024")
-    if token != valid_token:
-        return jsonify({"status": "error", "message": "Invalid token"}), 403
-    
-    from models.database import CurrentCar
-    session = db.get_session()
-    
-    try:
-        # Check if already initialized
-        existing_car = session.query(CurrentCar).first()
-        if existing_car:
-            return jsonify({"status": "already_initialized", "message": "Database already has current car data"})
-        
-        # Add current car
-        current_car = CurrentCar(
-            license_plate="SX-515-N",
-            make="OPEL",
-            model="ASTRA SPORTS TOURER+",
-            year=2018,
-            mileage_km=151000,
-            fuel_type="Benzine",
-            body_type="Personenauto",
-            color="GRIJS",
-            rdw_data={},
-            purchase_price=16750.0,
-            purchase_date=datetime(2022, 1, 15),
-            target_sale_value=14000,
-            purchase_mileage_km=74751,
-            estimated_new_price=29838.0
-        )
-        session.add(current_car)
-        session.commit()
-        
-        return jsonify({
-            "status": "success",
-            "message": "Database initialized with current car data",
-            "car": "SX-515-N"
-        })
-            
-    except Exception as e:
-        session.rollback()
-        return jsonify({"status": "error", "message": str(e)}), 500
-    finally:
-        session.close()
-
-
-
