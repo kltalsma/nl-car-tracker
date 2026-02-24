@@ -1861,6 +1861,98 @@ def get_heerenveen_matches(session, fuel_type, config, limit=3):
     
     return top_cars
 
+
+def _car_fingerprint_key(car):
+    """Loose dedupe key across sources for near-identical listings."""
+    return (
+        str(car.make or '').strip().lower(),
+        str(car.model or '').strip().lower(),
+        int(car.year or 0),
+        int(car.price or 0),
+        int(car.mileage_km or 0),
+        str(car.location_city or '').strip().lower()
+    )
+
+
+def _dedupe_cars(cars):
+    """Remove duplicates while preferring records with richer data."""
+    by_key = {}
+    for car in cars:
+        key = _car_fingerprint_key(car)
+        existing = by_key.get(key)
+        if not existing:
+            by_key[key] = car
+            continue
+
+        existing_data_score = sum(1 for v in [
+            existing.ad_listed_range_km, existing.wltp_reference_range_km, existing.evdb_real_range_km,
+            existing.storage_capacity_liters, existing.distance_from_heerenveen_km
+        ] if v is not None)
+        new_data_score = sum(1 for v in [
+            car.ad_listed_range_km, car.wltp_reference_range_km, car.evdb_real_range_km,
+            car.storage_capacity_liters, car.distance_from_heerenveen_km
+        ] if v is not None)
+        if new_data_score > existing_data_score:
+            by_key[key] = car
+    return list(by_key.values())
+
+
+def _fuel_confidence(car):
+    """Heuristic confidence for fuel classification quality."""
+    model = str(car.model or '').lower()
+    fuel = str(car.fuel_type or '')
+    ad_range = car.ad_listed_range_km or car.electric_range_km or car.range_km
+
+    if fuel == 'Full Electric':
+        strong_model_markers = ['ev', 'electric', 'e-tron', 'id.', 'enyaq', 'leaf', 'zoe', 'ioniq', 'model']
+        has_ev_marker = any(m in model for m in strong_model_markers)
+        if ad_range and ad_range >= 250 and has_ev_marker:
+            return 'high'
+        if ad_range and ad_range >= 250:
+            return 'medium'
+        return 'low'
+
+    if fuel in ['PHEV', 'Hybrid']:
+        if ad_range and ad_range >= 30:
+            return 'high'
+        if ad_range:
+            return 'medium'
+        return 'low'
+
+    return 'low'
+
+
+def _annotate_and_filter_cars(cars, fuel_group, hide_low_conf=False, hide_unknown_range=False):
+    """Annotate cars for UI and optionally filter for debug toggles."""
+    kept = []
+    excluded = []
+
+    for car in cars:
+        confidence = _fuel_confidence(car)
+        car.fuel_confidence = confidence
+        car.source_badge = str(car.source_website or 'unknown')
+
+        ad_range = car.ad_listed_range_km or car.electric_range_km or car.range_km
+        is_unknown_range = ad_range is None
+
+        reason = None
+        if hide_low_conf and confidence == 'low':
+            reason = 'low fuel confidence'
+        elif hide_unknown_range and is_unknown_range:
+            reason = 'unknown range'
+
+        if reason:
+            excluded.append({
+                'car': car,
+                'reason': reason,
+                'fuel_group': fuel_group
+            })
+        else:
+            kept.append(car)
+
+    return kept, excluded
+
+
 @app.route('/top-matches')
 @login_required
 def top_matches():
@@ -1880,6 +1972,9 @@ def top_matches():
     max_mileage = request.args.get('max_mileage', type=int)
     max_distance = request.args.get('max_distance', type=float)
     min_storage = request.args.get('min_storage', type=int)
+    hide_low_conf = request.args.get('hide_low_confidence') in ('1', 'true', 'on', 'yes')
+    hide_unknown_range = request.args.get('hide_unknown_range') in ('1', 'true', 'on', 'yes')
+    show_excluded_preview = request.args.get('show_excluded_preview') in ('1', 'true', 'on', 'yes')
     
     # Build base query for Full Electric cars
     full_electric_query = session.query(Car).filter(
@@ -1912,7 +2007,8 @@ def top_matches():
     if min_storage:
         full_electric_query = full_electric_query.filter(Car.storage_capacity_liters >= min_storage)
     
-    full_electric_all = full_electric_query.all()
+    full_electric_all = _dedupe_cars(full_electric_query.all())
+    excluded_debug = []
     
     # Filter out excluded vehicles and apply family car size filters
     # IMPORTANT: Full Electric list should only contain genuine EV-range candidates
@@ -1927,6 +2023,15 @@ def top_matches():
         and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 500)  # Min 500L boot when known
         and ((car.ad_listed_range_km or car.wltp_reference_range_km or car.evdb_real_range_km or 0) >= min_full_ev_range)
     ]
+
+    # Optional UI toggles for confidence/range noise control
+    full_electric_filtered, full_ev_excluded = _annotate_and_filter_cars(
+        full_electric_filtered,
+        'Full Electric',
+        hide_low_conf=hide_low_conf,
+        hide_unknown_range=hide_unknown_range
+    )
+    excluded_debug.extend(full_ev_excluded)
     
     # Define preferred makes and models (same as my-matches page)
     preferred_makes = ['Skoda', 'Audi', 'Kia']
@@ -2012,7 +2117,7 @@ def top_matches():
     if min_storage:
         phev_query = phev_query.filter(Car.storage_capacity_liters >= min_storage)
     
-    phev_all = phev_query.all()
+    phev_all = _dedupe_cars(phev_query.all())
     
     # Filter out excluded vehicles and apply family car size filters
     phev_filtered = [
@@ -2022,6 +2127,14 @@ def top_matches():
         and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
         and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 500)  # Min 500L boot when known
     ]
+
+    phev_filtered, phev_excluded = _annotate_and_filter_cars(
+        phev_filtered,
+        'PHEV/Hybrid',
+        hide_low_conf=hide_low_conf,
+        hide_unknown_range=hide_unknown_range
+    )
+    excluded_debug.extend(phev_excluded)
     
     # Score and sort PHEV cars
     phev_scored = []
@@ -2130,7 +2243,11 @@ def top_matches():
                           config=config,
                           available_makes=available_makes,
                           available_models=available_models,
-                          user_reqs=user_reqs)
+                          user_reqs=user_reqs,
+                          hide_low_conf=hide_low_conf,
+                          hide_unknown_range=hide_unknown_range,
+                          show_excluded_preview=show_excluded_preview,
+                          excluded_preview=excluded_debug)
 
 
 @app.route('/analytics')
