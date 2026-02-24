@@ -294,6 +294,29 @@ def clean_excluded_vehicles_from_db():
         return 0
 
 
+def purge_unavailable_cars_from_db():
+    """
+    Hard-delete cars marked unavailable from the database.
+    This keeps Top Matches clean and prevents stale/sold cars from resurfacing.
+    """
+    session = None
+    try:
+        session = db.get_session()
+        deleted = session.query(Car).filter(Car.is_available == False).delete(synchronize_session=False)
+        session.commit()
+        if deleted:
+            logger.info(f"Purged {deleted} unavailable cars from database")
+        return deleted
+    except Exception as e:
+        logger.error(f"Error purging unavailable cars: {e}")
+        if session:
+            session.rollback()
+        return 0
+    finally:
+        if session:
+            session.close()
+
+
 def run_scrapers():
     """Background task to run all scrapers"""
     logger.info("Starting scheduled scraper run...")
@@ -395,6 +418,10 @@ def check_car_availability():
             session.commit()
         
         logger.info(f"Availability check complete: {result.get('cars_checked', 0)} checked, {result.get('cars_marked_unavailable', 0)} marked unavailable")
+
+        # Keep DB clean: remove unavailable cars entirely
+        purged_count = purge_unavailable_cars_from_db()
+        result['cars_purged_from_db'] = purged_count
         
         session.close()
         return result
@@ -1781,10 +1808,14 @@ def get_heerenveen_matches(session, fuel_type, config, limit=3):
     
     all_cars = query.all()
     
-    # Filter out only excluded vehicles (no family car requirements)
+    # Filter out excluded vehicles and enforce EV-range sanity for Full Electric set
     filtered_cars = [
         car for car in all_cars 
         if not should_exclude_vehicle(str(car.make or ''), str(car.model or ''))
+        and (
+            fuel_type != 'Full Electric' or
+            ((car.ad_listed_range_km or car.wltp_reference_range_km or car.evdb_real_range_km or 0) >= 300)
+        )
     ]
     
     # Score and sort cars
@@ -1884,12 +1915,17 @@ def top_matches():
     full_electric_all = full_electric_query.all()
     
     # Filter out excluded vehicles and apply family car size filters
+    # IMPORTANT: Full Electric list should only contain genuine EV-range candidates
+    fuel_cfgs = config.get('search', {}).get('fuel_types', [])
+    full_ev_cfg = next((f for f in fuel_cfgs if f.get('type') == 'Full Electric'), {})
+    min_full_ev_range = full_ev_cfg.get('min_range_km', 300)
     full_electric_filtered = [
         car for car in full_electric_all 
         if not should_exclude_vehicle(str(car.make or ''), str(car.model or ''))
         and (car.doors is None or car.doors >= 4)  # Require 4+ doors (or unknown)
         and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
         and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 500)  # Min 500L boot when known
+        and ((car.ad_listed_range_km or car.wltp_reference_range_km or car.evdb_real_range_km or 0) >= min_full_ev_range)
     ]
     
     # Define preferred makes and models (same as my-matches page)
