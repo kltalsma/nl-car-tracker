@@ -399,6 +399,12 @@ notifications:
     notify_on_top_match: true
     notify_on_unavailable_preferred: true
     min_score_for_notification: 85
+availability_sync:
+  enabled: true
+  strategy: strict
+  min_seen_cars: 20
+  min_seen_ratio: 0.4
+
 availability_checker:
   enabled: true
   check_interval_hours: 0.25
@@ -406,9 +412,9 @@ availability_checker:
   scrape_alternatives: true
   notify_on_preferred_unavailable: true
   max_cars_per_run: 100
-  check_within_budget_only: true  # Only check cars within max_price limit
-  remove_unavailable_from_db: true  # Hard-delete unavailable cars instead of marking
-  driver_restart_interval: 250  # Restart Chrome every N cars to prevent crashes
+  driver_restart_interval: 250
+  check_within_budget_only: true
+  remove_unavailable_from_db: true
   recheck_unavailable:
     enabled: true
     check_interval_hours: 168

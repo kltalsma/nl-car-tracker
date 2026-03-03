@@ -294,29 +294,6 @@ def clean_excluded_vehicles_from_db():
         return 0
 
 
-def purge_unavailable_cars_from_db():
-    """
-    Hard-delete cars marked unavailable from the database.
-    This keeps Top Matches clean and prevents stale/sold cars from resurfacing.
-    """
-    session = None
-    try:
-        session = db.get_session()
-        deleted = session.query(Car).filter(Car.is_available == False).delete(synchronize_session=False)
-        session.commit()
-        if deleted:
-            logger.info(f"Purged {deleted} unavailable cars from database")
-        return deleted
-    except Exception as e:
-        logger.error(f"Error purging unavailable cars: {e}")
-        if session:
-            session.rollback()
-        return 0
-    finally:
-        if session:
-            session.close()
-
-
 def run_scrapers():
     """Background task to run all scrapers"""
     logger.info("Starting scheduled scraper run...")
@@ -387,6 +364,7 @@ def check_car_availability():
         days_threshold = av_config.get('check_stale_cars_days', 3)
         scrape_alternatives = av_config.get('scrape_alternatives', False)
         max_cars = av_config.get('max_cars_per_run', 100)
+        within_budget_only = av_config.get('check_within_budget_only', True)
         
         # Check cars not seen in the specified days
         checker = AvailabilityChecker(
@@ -399,14 +377,15 @@ def check_car_availability():
         # Run availability check with filters
         filters = {
             'older_than_days': days_threshold,
-            'limit': max_cars
+            'limit': max_cars,
+            'within_budget': within_budget_only
         }
         
-        result = checker.check_and_update_availability(filters, within_budget=True)
+        result = checker.check_and_update_availability(filters)
         
         # Handle case where result is None (no cars to check)
         if result is None:
-            result = {'cars_checked': 0, 'cars_marked_unavailable': 0}
+            result = {'cars_checked': 0, 'cars_marked_unavailable': 0, 'cars_removed_from_db': 0}
         
         # Update log entry with results
         log_entry = session.query(ScraperLog).get(log_id)
@@ -414,14 +393,14 @@ def check_car_availability():
             log_entry.completed_at = datetime.utcnow()
             log_entry.status = 'success'
             log_entry.cars_found = result.get('cars_checked', 0)
-            log_entry.cars_updated = result.get('cars_marked_unavailable', 0)
+            log_entry.cars_updated = result.get('cars_marked_unavailable', 0) + result.get('cars_removed_from_db', 0)
             session.commit()
         
-        logger.info(f"Availability check complete: {result.get('cars_checked', 0)} checked, {result.get('cars_marked_unavailable', 0)} marked unavailable")
-
-        # Keep DB clean: remove unavailable cars entirely
-        purged_count = purge_unavailable_cars_from_db()
-        result['cars_purged_from_db'] = purged_count
+        logger.info(
+            f"Availability check complete: {result.get('cars_checked', 0)} checked, "
+            f"{result.get('cars_marked_unavailable', 0)} marked unavailable, "
+            f"{result.get('cars_removed_from_db', 0)} removed from DB"
+        )
         
         session.close()
         return result
@@ -1808,14 +1787,10 @@ def get_heerenveen_matches(session, fuel_type, config, limit=3):
     
     all_cars = query.all()
     
-    # Filter out excluded vehicles and enforce EV-range sanity for Full Electric set
+    # Filter out only excluded vehicles (no family car requirements)
     filtered_cars = [
         car for car in all_cars 
         if not should_exclude_vehicle(str(car.make or ''), str(car.model or ''))
-        and (
-            fuel_type != 'Full Electric' or
-            ((car.ad_listed_range_km or car.wltp_reference_range_km or car.evdb_real_range_km or 0) >= 300)
-        )
     ]
     
     # Score and sort cars
@@ -1861,98 +1836,6 @@ def get_heerenveen_matches(session, fuel_type, config, limit=3):
     
     return top_cars
 
-
-def _car_fingerprint_key(car):
-    """Loose dedupe key across sources for near-identical listings."""
-    return (
-        str(car.make or '').strip().lower(),
-        str(car.model or '').strip().lower(),
-        int(car.year or 0),
-        int(car.price or 0),
-        int(car.mileage_km or 0),
-        str(car.location_city or '').strip().lower()
-    )
-
-
-def _dedupe_cars(cars):
-    """Remove duplicates while preferring records with richer data."""
-    by_key = {}
-    for car in cars:
-        key = _car_fingerprint_key(car)
-        existing = by_key.get(key)
-        if not existing:
-            by_key[key] = car
-            continue
-
-        existing_data_score = sum(1 for v in [
-            existing.ad_listed_range_km, existing.wltp_reference_range_km, existing.evdb_real_range_km,
-            existing.storage_capacity_liters, existing.distance_from_heerenveen_km
-        ] if v is not None)
-        new_data_score = sum(1 for v in [
-            car.ad_listed_range_km, car.wltp_reference_range_km, car.evdb_real_range_km,
-            car.storage_capacity_liters, car.distance_from_heerenveen_km
-        ] if v is not None)
-        if new_data_score > existing_data_score:
-            by_key[key] = car
-    return list(by_key.values())
-
-
-def _fuel_confidence(car):
-    """Heuristic confidence for fuel classification quality."""
-    model = str(car.model or '').lower()
-    fuel = str(car.fuel_type or '')
-    ad_range = car.ad_listed_range_km or car.electric_range_km or car.range_km
-
-    if fuel == 'Full Electric':
-        strong_model_markers = ['ev', 'electric', 'e-tron', 'id.', 'enyaq', 'leaf', 'zoe', 'ioniq', 'model']
-        has_ev_marker = any(m in model for m in strong_model_markers)
-        if ad_range and ad_range >= 250 and has_ev_marker:
-            return 'high'
-        if ad_range and ad_range >= 250:
-            return 'medium'
-        return 'low'
-
-    if fuel in ['PHEV', 'Hybrid']:
-        if ad_range and ad_range >= 30:
-            return 'high'
-        if ad_range:
-            return 'medium'
-        return 'low'
-
-    return 'low'
-
-
-def _annotate_and_filter_cars(cars, fuel_group, hide_low_conf=False, hide_unknown_range=False):
-    """Annotate cars for UI and optionally filter for debug toggles."""
-    kept = []
-    excluded = []
-
-    for car in cars:
-        confidence = _fuel_confidence(car)
-        car.fuel_confidence = confidence
-        car.source_badge = str(car.source_website or 'unknown')
-
-        ad_range = car.ad_listed_range_km or car.electric_range_km or car.range_km
-        is_unknown_range = ad_range is None
-
-        reason = None
-        if hide_low_conf and confidence == 'low':
-            reason = 'low fuel confidence'
-        elif hide_unknown_range and is_unknown_range:
-            reason = 'unknown range'
-
-        if reason:
-            excluded.append({
-                'car': car,
-                'reason': reason,
-                'fuel_group': fuel_group
-            })
-        else:
-            kept.append(car)
-
-    return kept, excluded
-
-
 @app.route('/top-matches')
 @login_required
 def top_matches():
@@ -1972,9 +1855,6 @@ def top_matches():
     max_mileage = request.args.get('max_mileage', type=int)
     max_distance = request.args.get('max_distance', type=float)
     min_storage = request.args.get('min_storage', type=int)
-    hide_low_conf = request.args.get('hide_low_confidence') in ('1', 'true', 'on', 'yes')
-    hide_unknown_range = request.args.get('hide_unknown_range') in ('1', 'true', 'on', 'yes')
-    show_excluded_preview = request.args.get('show_excluded_preview') in ('1', 'true', 'on', 'yes')
     
     # Build base query for Full Electric cars
     full_electric_query = session.query(Car).filter(
@@ -2007,31 +1887,16 @@ def top_matches():
     if min_storage:
         full_electric_query = full_electric_query.filter(Car.storage_capacity_liters >= min_storage)
     
-    full_electric_all = _dedupe_cars(full_electric_query.all())
-    excluded_debug = []
+    full_electric_all = full_electric_query.all()
     
     # Filter out excluded vehicles and apply family car size filters
-    # IMPORTANT: Full Electric list should only contain genuine EV-range candidates
-    fuel_cfgs = config.get('search', {}).get('fuel_types', [])
-    full_ev_cfg = next((f for f in fuel_cfgs if f.get('type') == 'Full Electric'), {})
-    min_full_ev_range = full_ev_cfg.get('min_range_km', 300)
     full_electric_filtered = [
         car for car in full_electric_all 
         if not should_exclude_vehicle(str(car.make or ''), str(car.model or ''))
         and (car.doors is None or car.doors >= 4)  # Require 4+ doors (or unknown)
         and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
         and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 500)  # Min 500L boot when known
-        and ((car.ad_listed_range_km or car.wltp_reference_range_km or car.evdb_real_range_km or 0) >= min_full_ev_range)
     ]
-
-    # Optional UI toggles for confidence/range noise control
-    full_electric_filtered, full_ev_excluded = _annotate_and_filter_cars(
-        full_electric_filtered,
-        'Full Electric',
-        hide_low_conf=hide_low_conf,
-        hide_unknown_range=hide_unknown_range
-    )
-    excluded_debug.extend(full_ev_excluded)
     
     # Define preferred makes and models (same as my-matches page)
     preferred_makes = ['Skoda', 'Audi', 'Kia']
@@ -2117,7 +1982,7 @@ def top_matches():
     if min_storage:
         phev_query = phev_query.filter(Car.storage_capacity_liters >= min_storage)
     
-    phev_all = _dedupe_cars(phev_query.all())
+    phev_all = phev_query.all()
     
     # Filter out excluded vehicles and apply family car size filters
     phev_filtered = [
@@ -2127,14 +1992,6 @@ def top_matches():
         and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
         and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 500)  # Min 500L boot when known
     ]
-
-    phev_filtered, phev_excluded = _annotate_and_filter_cars(
-        phev_filtered,
-        'PHEV/Hybrid',
-        hide_low_conf=hide_low_conf,
-        hide_unknown_range=hide_unknown_range
-    )
-    excluded_debug.extend(phev_excluded)
     
     # Score and sort PHEV cars
     phev_scored = []
@@ -2243,11 +2100,7 @@ def top_matches():
                           config=config,
                           available_makes=available_makes,
                           available_models=available_models,
-                          user_reqs=user_reqs,
-                          hide_low_conf=hide_low_conf,
-                          hide_unknown_range=hide_unknown_range,
-                          show_excluded_preview=show_excluded_preview,
-                          excluded_preview=excluded_debug)
+                          user_reqs=user_reqs)
 
 
 @app.route('/analytics')

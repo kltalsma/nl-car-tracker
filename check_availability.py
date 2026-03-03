@@ -162,6 +162,9 @@ class AvailabilityChecker:
             options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--disable-software-rasterizer')
+        options.add_argument('--disable-extensions')
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_argument('user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36')
         options.add_argument(f'--user-data-dir={self._chrome_temp_dir}')
@@ -169,6 +172,7 @@ class AvailabilityChecker:
         options.add_argument(f'--disk-cache-dir={self._chrome_temp_dir}/cache')
         
         self.driver = webdriver.Chrome(options=options)
+        self.driver.set_page_load_timeout(30)
         logger.info("WebDriver initialized")
     
     def _close_driver(self, force=False):
@@ -525,7 +529,7 @@ class AvailabilityChecker:
             session.close()
             self._close_driver(force=True)
     
-    def check_and_update_availability(self, filters=None, within_budget=False):
+    def check_and_update_availability(self, filters=None):
         """
         Check availability for cars matching filters and update database
         
@@ -535,11 +539,19 @@ class AvailabilityChecker:
                 - website: Only check specific website
                 - limit: Max number of cars to check
                 - all: Check all available cars
-            within_budget: If True, only check cars within configured max_price
+                - within_budget: Only check cars within configured max price
         """
         session = self.db.get_session()
         
         try:
+            availability_config = self.config.get('availability_checker', {})
+            remove_unavailable_from_db = availability_config.get('remove_unavailable_from_db', False)
+
+            if remove_unavailable_from_db:
+                removed_count = session.query(Car).filter(Car.is_available == False).delete(synchronize_session=False)
+                if removed_count > 0:
+                    session.commit()
+                    logger.info(f"Purged {removed_count} previously unavailable car(s) from database")
             # Get user requirements from config (same as web UI)
             user_reqs = {
                 "min_price": self.config.get("search_criteria", {}).get("min_price", 15000),
