@@ -364,6 +364,7 @@ def check_car_availability():
         days_threshold = av_config.get('check_stale_cars_days', 3)
         scrape_alternatives = av_config.get('scrape_alternatives', False)
         max_cars = av_config.get('max_cars_per_run', 100)
+        within_budget_only = av_config.get('check_within_budget_only', True)
         
         # Check cars not seen in the specified days
         checker = AvailabilityChecker(
@@ -376,14 +377,15 @@ def check_car_availability():
         # Run availability check with filters
         filters = {
             'older_than_days': days_threshold,
-            'limit': max_cars
+            'limit': max_cars,
+            'within_budget': within_budget_only
         }
         
         result = checker.check_and_update_availability(filters)
         
         # Handle case where result is None (no cars to check)
         if result is None:
-            result = {'cars_checked': 0, 'cars_marked_unavailable': 0}
+            result = {'cars_checked': 0, 'cars_marked_unavailable': 0, 'cars_removed_from_db': 0}
         
         # Update log entry with results
         log_entry = session.query(ScraperLog).get(log_id)
@@ -391,10 +393,14 @@ def check_car_availability():
             log_entry.completed_at = datetime.utcnow()
             log_entry.status = 'success'
             log_entry.cars_found = result.get('cars_checked', 0)
-            log_entry.cars_updated = result.get('cars_marked_unavailable', 0)
+            log_entry.cars_updated = result.get('cars_marked_unavailable', 0) + result.get('cars_removed_from_db', 0)
             session.commit()
         
-        logger.info(f"Availability check complete: {result.get('cars_checked', 0)} checked, {result.get('cars_marked_unavailable', 0)} marked unavailable")
+        logger.info(
+            f"Availability check complete: {result.get('cars_checked', 0)} checked, "
+            f"{result.get('cars_marked_unavailable', 0)} marked unavailable, "
+            f"{result.get('cars_removed_from_db', 0)} removed from DB"
+        )
         
         session.close()
         return result

@@ -376,72 +376,101 @@ class BaseScraper(ABC):
     
     def _mark_unseen_cars_unavailable(self):
         """
-        Mark cars from this website that were not seen in this scrape as unavailable
-        
-        DISABLED: This function is currently disabled due to scraper reliability issues.
-        Scrapers often return incomplete results (e.g., finding only 2-4 cars when 80+ exist),
-        which causes false positives where available cars are incorrectly marked as unavailable.
-        
-        Instead, use the dedicated check_availability.py script to proactively verify
-        individual car availability by checking their listing URLs directly.
-        
-        Safety mechanism: If very few cars were seen (< 5), we don't mark anything unavailable
-        to avoid false negatives from scraper issues.
+        Reconcile website inventory after a scrape.
+
+        When this scraper saw enough cars to trust the run, cars from this website
+        that were not seen in the current scrape are considered gone from the source.
+        Depending on configuration, they are either marked unavailable or deleted.
         """
         session = self.db.get_session()
-        
+
         try:
-            # Safety check: If we saw very few or no cars, don't mark anything unavailable
-            # This prevents false negatives when the scraper has issues
             cars_seen_count = len(self.seen_external_ids)
-            
-            # DISABLED: Return early to prevent false positives
-            # The scrapers are unreliable and often return incomplete results
-            # This was causing available cars to be incorrectly marked as unavailable
-            self.logger.info(
-                f"Availability checking disabled - saw {cars_seen_count} cars but will NOT mark unseen cars as unavailable. "
-                f"Use check_availability.py for availability verification instead."
-            )
-            return 0
-            
-            # Original logic below (kept for reference but unreachable)
-            if cars_seen_count < 5:
+
+            # Guardrails / strategy for unseen-car reconciliation
+            sync_config = self.config.get('availability_sync', {})
+            sync_enabled = sync_config.get('enabled', True)
+            sync_strategy = sync_config.get('strategy', 'strict')  # strict | guarded
+            min_seen_cars = sync_config.get('min_seen_cars', 20)
+            min_seen_ratio = sync_config.get('min_seen_ratio', 0.4)
+            remove_unavailable_from_db = self.config.get('availability_checker', {}).get('remove_unavailable_from_db', False)
+
+            if not sync_enabled:
+                self.logger.info("Inventory sync disabled; skipping unseen-car reconciliation")
+                return 0
+
+            # In strict mode we always reconcile if the scraper found anything at all.
+            # In guarded mode, enforce minimum absolute and relative seen thresholds.
+            if cars_seen_count == 0:
+                self.logger.warning("Saw 0 cars in this scrape; skipping unseen-car reconciliation for safety")
+                return 0
+
+            total_available_before = session.query(Car).filter(
+                Car.source_website == self.website_name,
+                Car.is_available == True
+            ).count()
+
+            if total_available_before == 0:
+                self.logger.info("No currently available cars to reconcile for this website")
+                return 0
+
+            seen_ratio = cars_seen_count / total_available_before if total_available_before > 0 else 1.0
+            if sync_strategy == 'guarded' and (cars_seen_count < min_seen_cars or seen_ratio < min_seen_ratio):
                 self.logger.warning(
-                    f"Only saw {cars_seen_count} cars - skipping availability update to prevent false negatives. "
-                    f"This might indicate scraper issues."
+                    f"Skipping unseen-car reconciliation for safety: saw {cars_seen_count} car(s), "
+                    f"baseline available={total_available_before}, seen_ratio={seen_ratio:.2f}, "
+                    f"required min_seen_cars={min_seen_cars}, min_seen_ratio={min_seen_ratio:.2f}"
                 )
                 return 0
-            
-            # Find all cars from this website that are currently marked as available
-            # but were not seen in this scrape session
+
+            if sync_strategy == 'strict':
+                self.logger.info(
+                    f"Strict inventory sync active: reconciling against {cars_seen_count} seen car(s) "
+                    f"for {self.website_name}"
+                )
+
             available_cars = session.query(Car).filter(
                 Car.source_website == self.website_name,
                 Car.is_available == True
             ).all()
-            
-            cars_marked_unavailable = 0
-            
+
+            cars_reconciled = 0
+
             for car in available_cars:
-                if car.external_id not in self.seen_external_ids:
+                if car.external_id in self.seen_external_ids:
+                    continue
+
+                if remove_unavailable_from_db:
+                    session.delete(car)
+                    self.logger.info(
+                        f"Removed unseen car: {car.make} {car.model} ({car.year}) - no longer listed"
+                    )
+                else:
                     car.mark_unavailable('not_found_in_scrape')
-                    cars_marked_unavailable += 1
-                    self.logger.info(f"Marked as unavailable: {car.make} {car.model} ({car.year}) - no longer listed")
-            
+                    self.logger.info(
+                        f"Marked as unavailable: {car.make} {car.model} ({car.year}) - no longer listed"
+                    )
+
+                cars_reconciled += 1
+
             session.commit()
-            
-            if cars_marked_unavailable > 0:
-                self.logger.info(f"Marked {cars_marked_unavailable} cars as unavailable (from {len(available_cars)} total available)")
-            
-            return cars_marked_unavailable
-            
+
+            if cars_reconciled > 0:
+                action = 'removed from DB' if remove_unavailable_from_db else 'marked unavailable'
+                self.logger.info(
+                    f"Reconciled {cars_reconciled} unseen cars ({action}) from {total_available_before} previously available"
+                )
+
+            return cars_reconciled
+
         except Exception as e:
             session.rollback()
-            self.logger.error(f"Error marking unseen cars as unavailable: {e}")
+            self.logger.error(f"Error reconciling unseen cars: {e}")
             return 0
-        
+
         finally:
             session.close()
-    
+
     def _log_scraping_session(self, status, cars_found=0, cars_new=0, cars_updated=0, error_message=None):
         """Log scraping session to database"""
         session = self.db.get_session()

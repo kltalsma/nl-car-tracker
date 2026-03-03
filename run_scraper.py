@@ -249,10 +249,12 @@ def run_continuous_scraping():
                     # Check cars not seen recently (e.g., older than 1 day)
                     days_threshold = config.get('availability_checker', {}).get('check_stale_cars_days', 3)
                     max_cars = config.get('availability_checker', {}).get('max_cars_per_run', 100)
+                    within_budget_only = config.get('availability_checker', {}).get('check_within_budget_only', True)
                     availability_checker.check_and_update_availability(
                         filters={
                             'older_than_days': days_threshold,
-                            'limit': max_cars
+                            'limit': max_cars,
+                            'within_budget': within_budget_only
                         }
                     )
                     
