@@ -139,6 +139,7 @@ vehicle_classification:
     - Grandland
     - Corsa
     - Rocks
+    - Ampera-E
     Renault:
     - Kangoo
     - Kangoo Advance
@@ -404,7 +405,6 @@ availability_sync:
   strategy: strict
   min_seen_cars: 20
   min_seen_ratio: 0.4
-
 availability_checker:
   enabled: true
   check_interval_hours: 0.25
