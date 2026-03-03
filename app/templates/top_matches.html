@@ -20,6 +20,32 @@
                 <strong>Value Rating:</strong> Cars are scored 0-100% based on best value for money, considering price (40%), mileage (30%), age (20%), and range (10%). 
                 Higher percentages = better deals. Critical features like trekhaak and hill hold are highlighted below.
             </div>
+
+            <form method="GET" class="mb-3 p-3 border rounded bg-light">
+                <div class="row g-2 align-items-center">
+                    <div class="col-md-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="hideLowConfidence" name="hide_low_confidence" value="1" {% if hide_low_conf %}checked{% endif %}>
+                            <label class="form-check-label" for="hideLowConfidence">Hide low-confidence fuel type</label>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="hideUnknownRange" name="hide_unknown_range" value="1" {% if hide_unknown_range %}checked{% endif %}>
+                            <label class="form-check-label" for="hideUnknownRange">Hide unknown range</label>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="showExcludedPreview" name="show_excluded_preview" value="1" {% if show_excluded_preview %}checked{% endif %}>
+                            <label class="form-check-label" for="showExcludedPreview">Show excluded-by-rule preview</label>
+                        </div>
+                    </div>
+                    <div class="col-md-3 text-end">
+                        <button type="submit" class="btn btn-sm btn-primary">Apply debug filters</button>
+                    </div>
+                </div>
+            </form>
     {% if cars_by_fuel %}
         {% for fuel_type, cars in cars_by_fuel.items() %}
         <div class="mb-5">
@@ -67,6 +93,14 @@
                             <h5 class="card-title">{{ car.make }} {{ car.model }}</h5>
                             <p class="card-text">
                                 <small class="text-muted">{{ car.year }} • {{ car.fuel_type }}</small>
+                                <span class="badge bg-light text-dark border ms-1">Source: {{ car.source_badge or car.source_website }}</span>
+                                {% if car.fuel_confidence == 'high' %}
+                                <span class="badge bg-success ms-1">Fuel confidence: High</span>
+                                {% elif car.fuel_confidence == 'medium' %}
+                                <span class="badge bg-warning text-dark ms-1">Fuel confidence: Medium</span>
+                                {% else %}
+                                <span class="badge bg-danger ms-1">Fuel confidence: Low</span>
+                                {% endif %}
                                 {% if car.is_preferred %}
                                 <span class="badge bg-success text-white"><i class="bi bi-star-fill"></i> PREFERRED</span>
                                 {% endif %}
@@ -188,6 +222,40 @@
     {% else %}
     <div class="alert alert-warning" role="alert">
         <i class="bi bi-exclamation-triangle"></i> No perfect matches found yet. Keep checking back as we scrape more listings!
+    </div>
+    {% endif %}
+
+    {% if show_excluded_preview and excluded_preview %}
+    <div class="card mt-4 border-warning">
+        <div class="card-header bg-warning-subtle">
+            <strong><i class="bi bi-funnel"></i> Excluded by rule (preview)</strong>
+            <span class="badge bg-dark ms-2">{{ excluded_preview|length }}</span>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Fuel group</th>
+                            <th>Car</th>
+                            <th>Source</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for ex in excluded_preview[:30] %}
+                        <tr>
+                            <td>{{ ex.fuel_group }}</td>
+                            <td>{{ ex.car.make }} {{ ex.car.model }} ({{ ex.car.year }})</td>
+                            <td>{{ ex.car.source_website }}</td>
+                            <td><span class="badge bg-secondary">{{ ex.reason }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <small class="text-muted">Showing first 30 excluded items for debugging.</small>
+        </div>
     </div>
     {% endif %}
         </div>
