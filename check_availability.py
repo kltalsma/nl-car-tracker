@@ -19,6 +19,8 @@ import argparse
 import sys
 import json
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
 import time
@@ -33,6 +35,7 @@ from sqlalchemy import or_
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.common.exceptions import WebDriverException
 import yaml
 from bs4 import BeautifulSoup
 from PIL import Image
@@ -91,6 +94,7 @@ class AvailabilityChecker:
         self.driver = None
         self.scrape_alternatives = scrape_alternatives
         self.autoscout24_scraper = None
+        self._chrome_temp_dir = None
         
         # Load config to check preferred cars
         with open(config_path, 'r') as f:
@@ -148,24 +152,65 @@ class AvailabilityChecker:
         """Initialize Selenium WebDriver"""
         if self.driver:
             return
-        
+
         options = Options()
         if self.headless:
             options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--disable-software-rasterizer')
+        options.add_argument('--disable-extensions')
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_argument('user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36')
-        
+
+        # Use a writable temporary Chrome profile path to avoid session creation
+        # failures in constrained/containerized environments.
+        chrome_tmp_root = Path(self.config.get('scraping', {}).get('temp_dir', 'tmp/chrome_availability'))
+        chrome_tmp_root.mkdir(parents=True, exist_ok=True)
+        self._chrome_temp_dir = Path(tempfile.mkdtemp(prefix='profile_', dir=chrome_tmp_root))
+        options.add_argument(f'--user-data-dir={self._chrome_temp_dir}')
+        options.add_argument(f'--data-path={self._chrome_temp_dir / "data"}')
+        options.add_argument(f'--disk-cache-dir={self._chrome_temp_dir / "cache"}')
+
+        os.environ.setdefault('TMPDIR', str(chrome_tmp_root.resolve()))
+
         self.driver = webdriver.Chrome(options=options)
+        self.driver.set_page_load_timeout(30)
         logger.info("WebDriver initialized")
     
-    def _close_driver(self):
+    def _close_driver(self, force=False):
         """Close WebDriver"""
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
-            logger.info("WebDriver closed")
+        driver = self.driver
+        self.driver = None
+
+        if driver:
+            try:
+                if force:
+                    service = getattr(driver, 'service', None)
+                    process = getattr(service, 'process', None) if service else None
+
+                    if process and process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except Exception:
+                            process.kill()
+
+                    if service:
+                        service.stop()
+                else:
+                    driver.quit()
+            except WebDriverException as e:
+                logger.warning(f"WebDriver close warning: {e}")
+            except Exception as e:
+                logger.warning(f"Unexpected error while closing WebDriver: {e}")
+            finally:
+                logger.info("WebDriver closed")
+
+        if self._chrome_temp_dir and self._chrome_temp_dir.exists():
+            shutil.rmtree(self._chrome_temp_dir, ignore_errors=True)
+            self._chrome_temp_dir = None
     
     def load_cookies(self, website):
         """Load cookies from file to bypass privacy gates
@@ -287,132 +332,157 @@ class AvailabilityChecker:
     def check_car_availability(self, car, recheck_mode=False):
         """
         Check if a single car is still available
-        
+
         Args:
             car: Car object to check
             recheck_mode: If True, checking an unavailable car to see if it's available again
-        
+
         Returns:
             True if available, False if not available, None if couldn't determine
         """
-        try:
-            # Validate listing_url before attempting to load
-            if not car.listing_url or car.listing_url.strip() in ['', '...', 'None']:
-                logger.warning(f"  ⚠️  SKIPPING: Car has invalid or missing listing_url: '{car.listing_url}'")
-                return None
-            
-            # Initialize driver if not already done
-            if not self.driver:
-                self._init_driver()
-            
-            # Get the page
-            logger.debug(f"  Loading URL: {car.listing_url}")
-            self.driver.get(car.listing_url)
-            time.sleep(2)  # Wait for page to load
-            
-            # Get page source and parse with BeautifulSoup
-            page_source = self.driver.page_source
-            soup = BeautifulSoup(page_source, 'html.parser')
-            
-            # Remove script and style tags to avoid false positives from:
-            # - JavaScript translation strings (e.g., "detailpage.gonePage.title":"Dit voertuig is helaas niet meer beschikbaar.")
-            # - Embedded JSON data
-            # - CSS content
-            for element in soup.find_all(['script', 'style']):
-                element.decompose()
-            
-            # Get visible text only (lowercase for case-insensitive matching)
-            visible_text = soup.get_text().lower()
-            
-            # Check for unavailability indicators in visible text only
-            indicators = self.unavailable_indicators.get(car.source_website, [])
-            logger.debug(f"  Checking text indicators for website: {car.source_website}")
-            
-            for indicator in indicators:
-                if indicator.lower() in visible_text:
-                    if recheck_mode:
-                        logger.info(f"  ❌ STILL UNAVAILABLE: Found indicator '{indicator}' in visible content")
-                    else:
-                        logger.info(f"  ❌ UNAVAILABLE: Found indicator '{indicator}' in visible content")
-                    return (False, 'website_shows_unavailable')
-            
-            logger.debug(f"  ✓ No text indicators found")
-            
-            # Check for VERKOCHT/SOLD banner in images (especially for AutoScout24)
-            if car.source_website == 'autoscout24.nl':
-                logger.debug(f"  🔍 Running banner detection on images...")
-                has_banner, banner_text = self._detect_banner_text_in_images()
-                if has_banner:
-                    if recheck_mode:
-                        logger.info(f"  ❌ STILL UNAVAILABLE: Found '{banner_text.upper()}' banner in listing images")
-                    else:
-                        logger.info(f"  ❌ UNAVAILABLE: Found '{banner_text.upper()}' banner in listing images")
-                    return (False, 'banner_shows_sold')
-                else:
-                    logger.debug(f"  ✓ No banner detected in images")
-            
-            # Check HTTP status (if we got redirected or error page)
-            current_url = self.driver.current_url
-            if current_url != car.listing_url:
-                # Check if this is a privacy gate redirect (not an unavailability indicator)
-                is_privacy_gate = 'myprivacy.dpgmedia.nl' in current_url or 'privacygate' in current_url.lower()
-                
-                if is_privacy_gate:
-                    # This is a privacy/consent page, not an unavailability indicator
-                    logger.info(f"  🔒 Privacy gate detected, loading cookies and retrying...")
-                    
-                    # Extract website domain from original URL
-                    from urllib.parse import urlparse
-                    parsed_url = urlparse(car.listing_url)
-                    website = parsed_url.netloc.replace('www.', '')
-                    
-                    # Try loading cookies and retrying
-                    if self.load_cookies(website):
-                        logger.info(f"  🔄 Retrying with cookies loaded...")
-                        self.driver.get(car.listing_url)
-                        time.sleep(3)
-                        
-                        # Check the new URL after retry
-                        retry_url = self.driver.current_url
-                        if retry_url == car.listing_url:
-                            logger.info(f"  ✅ Successfully bypassed privacy gate")
-                            # Continue with normal availability checks below
-                            current_url = retry_url
+        max_attempts = 2
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # Validate listing_url before attempting to load
+                if not car.listing_url or car.listing_url.strip() in ['', '...', 'None']:
+                    logger.warning(f"  ⚠️  SKIPPING: Car has invalid or missing listing_url: '{car.listing_url}'")
+                    return None
+
+                # Initialize driver if not already done
+                if not self.driver:
+                    self._init_driver()
+
+                # Get the page
+                logger.debug(f"  Loading URL: {car.listing_url}")
+                self.driver.get(car.listing_url)
+                time.sleep(2)  # Wait for page to load
+
+                # Get page source and parse with BeautifulSoup
+                page_source = self.driver.page_source
+                soup = BeautifulSoup(page_source, 'html.parser')
+
+                # Remove script and style tags to avoid false positives from:
+                # - JavaScript translation strings (e.g., "detailpage.gonePage.title":"Dit voertuig is helaas niet meer beschikbaar.")
+                # - Embedded JSON data
+                # - CSS content
+                for element in soup.find_all(['script', 'style']):
+                    element.decompose()
+
+                # Get visible text only (lowercase for case-insensitive matching)
+                visible_text = soup.get_text().lower()
+
+                # Check for unavailability indicators in visible text only
+                indicators = self.unavailable_indicators.get(car.source_website, [])
+                logger.debug(f"  Checking text indicators for website: {car.source_website}")
+
+                for indicator in indicators:
+                    if indicator.lower() in visible_text:
+                        if recheck_mode:
+                            logger.info(f"  ❌ STILL UNAVAILABLE: Found indicator '{indicator}' in visible content")
                         else:
-                            # Still redirected after loading cookies - now it's really unavailable
-                            if recheck_mode:
-                                logger.info(f"  ❌ STILL UNAVAILABLE: Redirected even after loading cookies to {retry_url}")
+                            logger.info(f"  ❌ UNAVAILABLE: Found indicator '{indicator}' in visible content")
+                        return (False, 'website_shows_unavailable')
+
+                logger.debug(f"  ✓ No text indicators found")
+
+                # Check for VERKOCHT/SOLD banner in images (especially for AutoScout24)
+                if car.source_website == 'autoscout24.nl':
+                    logger.debug(f"  🔍 Running banner detection on images...")
+                    has_banner, banner_text = self._detect_banner_text_in_images()
+                    if has_banner:
+                        if recheck_mode:
+                            logger.info(f"  ❌ STILL UNAVAILABLE: Found '{banner_text.upper()}' banner in listing images")
+                        else:
+                            logger.info(f"  ❌ UNAVAILABLE: Found '{banner_text.upper()}' banner in listing images")
+                        return (False, 'banner_shows_sold')
+                    else:
+                        logger.debug(f"  ✓ No banner detected in images")
+
+                # Check HTTP status (if we got redirected or error page)
+                current_url = self.driver.current_url
+                if current_url != car.listing_url:
+                    # Check if this is a privacy gate redirect (not an unavailability indicator)
+                    is_privacy_gate = 'myprivacy.dpgmedia.nl' in current_url or 'privacygate' in current_url.lower()
+
+                    if is_privacy_gate:
+                        # This is a privacy/consent page, not an unavailability indicator
+                        logger.info(f"  🔒 Privacy gate detected, loading cookies and retrying...")
+
+                        # Extract website domain from original URL
+                        from urllib.parse import urlparse
+                        parsed_url = urlparse(car.listing_url)
+                        website = parsed_url.netloc.replace('www.', '')
+
+                        # Try loading cookies and retrying
+                        if self.load_cookies(website):
+                            logger.info(f"  🔄 Retrying with cookies loaded...")
+                            self.driver.get(car.listing_url)
+                            time.sleep(3)
+
+                            # Check the new URL after retry
+                            retry_url = self.driver.current_url
+                            if retry_url == car.listing_url:
+                                logger.info(f"  ✅ Successfully bypassed privacy gate")
+                                # Continue with normal availability checks below
+                                current_url = retry_url
                             else:
-                                logger.info(f"  ❌ UNAVAILABLE: Redirected even after loading cookies to {retry_url}")
+                                # Still redirected after loading cookies - now it's really unavailable
+                                if recheck_mode:
+                                    logger.info(f"  ❌ STILL UNAVAILABLE: Redirected even after loading cookies to {retry_url}")
+                                else:
+                                    logger.info(f"  ❌ UNAVAILABLE: Redirected even after loading cookies to {retry_url}")
+                                return (False, 'http_error')
+                        else:
+                            logger.warning(f"  ⚠️  Could not load cookies, treating as unavailable")
                             return (False, 'http_error')
+
+                    # Check if this is legitimate AutoScout24 URL canonicalization
+                    if car.source_website == 'autoscout24.nl' and is_legitimate_autoscout24_redirect(car.listing_url, current_url):
+                        logger.info(f"  ✅ Legitimate URL canonicalization: {car.listing_url} -> {current_url}")
+                        # Update stored URL for future checks but continue availability checks
+                        car.listing_url = current_url
                     else:
-                        logger.warning(f"  ⚠️  Could not load cookies, treating as unavailable")
+                        # This is a real redirect indicating unavailability
+                        if recheck_mode:
+                            logger.info(f"  ❌ STILL UNAVAILABLE: Redirected from {car.listing_url} to {current_url}")
+                        else:
+                            logger.info(f"  ❌ UNAVAILABLE: Redirected from {car.listing_url} to {current_url}")
                         return (False, 'http_error')
-                
-                # Check if this is legitimate AutoScout24 URL canonicalization
-                if car.source_website == 'autoscout24.nl' and is_legitimate_autoscout24_redirect(car.listing_url, current_url):
-                    logger.info(f"  ✅ Legitimate URL canonicalization: {car.listing_url} -> {current_url}")
-                    # Update stored URL for future checks but continue availability checks
-                    car.listing_url = current_url
+
+                # If we got here, car appears available
+                if recheck_mode:
+                    logger.info(f"  ✅ NOW AVAILABLE AGAIN!")
                 else:
-                    # This is a real redirect indicating unavailability
-                    if recheck_mode:
-                        logger.info(f"  ❌ STILL UNAVAILABLE: Redirected from {car.listing_url} to {current_url}")
-                    else:
-                        logger.info(f"  ❌ UNAVAILABLE: Redirected from {car.listing_url} to {current_url}")
-                    return (False, 'http_error')
-            
-            # If we got here, car appears available
-            if recheck_mode:
-                logger.info(f"  ✅ NOW AVAILABLE AGAIN!")
-            else:
-                logger.info(f"  ✅ AVAILABLE")
-            return (True, None)
-            
-        except Exception as e:
-            logger.error(f"  ⚠️  ERROR checking availability: {e}")
-            return None
-    
+                    logger.info(f"  ✅ AVAILABLE")
+                return (True, None)
+
+            except Exception as e:
+                error_text = str(e).lower()
+                crash_markers = [
+                    'tab crashed',
+                    'session deleted because of page crash',
+                    'invalid session id',
+                    'chrome not reachable',
+                    'target window already closed',
+                    'disconnected: not connected to devtools',
+                ]
+                is_browser_crash = any(marker in error_text for marker in crash_markers)
+                is_webdriver_exception = isinstance(e, WebDriverException)
+
+                logger.error(f"  ⚠️  ERROR checking availability: {e}")
+
+                # Any webdriver-level exception should trigger a browser reset so
+                # a dead session does not poison all subsequent checks.
+                if is_browser_crash or is_webdriver_exception:
+                    logger.warning("  🔄 WebDriver session issue detected; reinitializing WebDriver...")
+                    self._close_driver(force=True)
+
+                    if attempt < max_attempts:
+                        continue
+
+                return None
+
     def _is_preferred_car(self, car):
         """Check if a car matches preferred makes/models from config"""
         preferred_makes = [m.lower() for m in self.config.get('preferences', {}).get('preferred_makes', [])]
@@ -510,34 +580,51 @@ class AvailabilityChecker:
                 - website: Only check specific website
                 - limit: Max number of cars to check
                 - all: Check all available cars
+                - within_budget: Only check cars within configured max price
         """
         session = self.db.get_session()
-        
+        filters = filters or {}
+
         try:
+            availability_config = self.config.get('availability_checker', {})
+            remove_unavailable_from_db = availability_config.get('remove_unavailable_from_db', False)
+
+            if remove_unavailable_from_db:
+                removed_count = session.query(Car).filter(Car.is_available == False).delete(synchronize_session=False)
+                if removed_count > 0:
+                    session.commit()
+                    logger.info(f"Purged {removed_count} previously unavailable car(s) from database")
             # Build query
             query = session.query(Car).filter(Car.is_available == True)
-            
-            if filters:
-                # Filter by website
-                if filters.get('website'):
-                    query = query.filter(Car.source_website == filters['website'])
-                
-                # Filter by age
-                if filters.get('older_than_days'):
-                    cutoff_date = datetime.utcnow() - timedelta(days=filters['older_than_days'])
-                    query = query.filter(Car.last_seen < cutoff_date)
-                
-                # Limit
-                if filters.get('limit'):
-                    query = query.limit(filters['limit'])
-            
+
+            # Filter by website
+            if filters.get('website'):
+                query = query.filter(Car.source_website == filters['website'])
+
+            # Filter by budget (default on when configured)
+            within_budget = filters.get('within_budget')
+            if within_budget is None:
+                within_budget = availability_config.get('check_within_budget_only', True)
+            if within_budget:
+                max_price = self.config.get('search_criteria', {}).get('max_price')
+                if max_price is not None:
+                    query = query.filter(Car.price <= max_price)
+
+            # Filter by age
+            if filters.get('older_than_days'):
+                cutoff_date = datetime.utcnow() - timedelta(days=filters['older_than_days'])
+                query = query.filter(Car.last_seen < cutoff_date)
+
+            # Limit
+            if filters.get('limit'):
+                query = query.limit(filters['limit'])
+
             # Get cars to check
             cars = query.all()
             
             if not cars:
                 logger.info("No cars match the filters")
-                return {"cars_checked": 0, "cars_marked_unavailable": 0, "still_available": 0, "errors": 0}
-                return
+                return {"cars_checked": 0, "cars_marked_unavailable": 0, "cars_removed_from_db": 0, "still_available": 0, "errors": 0}
             
             logger.info(f"\n{'='*60}")
             logger.info(f"CHECKING AVAILABILITY FOR {len(cars)} CARS")
@@ -545,15 +632,22 @@ class AvailabilityChecker:
             
             # Initialize browser
             self._init_driver()
-            
+            restart_interval = availability_config.get('driver_restart_interval', 250)
+
             # Check each car
             checked = 0
             marked_unavailable = 0
+            removed_from_db = 0
             still_available = 0
             errors = 0
             total_alternatives_found = 0
             
             for i, car in enumerate(cars, 1):
+                if restart_interval and checked > 0 and checked % restart_interval == 0:
+                    logger.info(f"Recycling WebDriver after {checked} checks to keep long runs stable")
+                    self._close_driver(force=True)
+                    self._init_driver()
+
                 logger.info(f"\n[{i}/{len(cars)}] Checking: {car.year} {car.make} {car.model}")
                 logger.info(f"  Website: {car.source_website}")
                 logger.info(f"  Last seen: {car.last_seen}")
@@ -567,17 +661,22 @@ class AvailabilityChecker:
                     is_available, reason = result
                     
                     if is_available is False:
-                        # Mark as unavailable with reason
-                        car.mark_unavailable(reason)
-                        marked_unavailable += 1
-                        logger.info(f"  ➡️  Marked as UNAVAILABLE in database (reason: {reason})")
-                        
-                        # Commit immediately after marking unavailable
-                        session.commit()
-                        
                         # Scrape alternatives for AutoScout24 listings
                         alternatives_count = self._scrape_and_save_alternatives(car)
                         total_alternatives_found += alternatives_count
+
+                        if remove_unavailable_from_db:
+                            session.delete(car)
+                            removed_from_db += 1
+                            logger.info(f"  ➡️  Removed from database (reason: {reason})")
+                        else:
+                            # Mark as unavailable with reason
+                            car.mark_unavailable(reason)
+                            marked_unavailable += 1
+                            logger.info(f"  ➡️  Marked as UNAVAILABLE in database (reason: {reason})")
+
+                        # Commit immediately after each unavailable result
+                        session.commit()
                         
                     elif is_available is True:
                         still_available += 1
@@ -596,7 +695,10 @@ class AvailabilityChecker:
             logger.info(f"{'='*60}")
             logger.info(f"Total checked: {checked}")
             logger.info(f"Still available: {still_available}")
-            logger.info(f"Marked unavailable: {marked_unavailable}")
+            if remove_unavailable_from_db:
+                logger.info(f"Removed from database: {removed_from_db}")
+            else:
+                logger.info(f"Marked unavailable: {marked_unavailable}")
             logger.info(f"Alternative cars found: {total_alternatives_found}")
             logger.info(f"Errors: {errors}")
             logger.info(f"{'='*60}\n")
@@ -605,6 +707,7 @@ class AvailabilityChecker:
             return {
                 'cars_checked': checked,
                 'cars_marked_unavailable': marked_unavailable,
+                'cars_removed_from_db': removed_from_db,
                 'still_available': still_available,
                 'errors': errors
             }
@@ -616,7 +719,7 @@ class AvailabilityChecker:
         
         finally:
             session.close()
-            self._close_driver()
+            self._close_driver(force=True)
     
     def check_unavailable_cars(self, filters=None):
         """
@@ -674,7 +777,8 @@ class AvailabilityChecker:
             
             # Initialize browser
             self._init_driver()
-            
+            restart_interval = self.config.get('availability_checker', {}).get('driver_restart_interval', 250)
+
             # Check each car
             checked = 0
             remarked_available = 0
@@ -682,6 +786,11 @@ class AvailabilityChecker:
             errors = 0
             
             for i, car in enumerate(cars, 1):
+                if restart_interval and checked > 0 and checked % restart_interval == 0:
+                    logger.info(f"Recycling WebDriver after {checked} checks to keep long runs stable")
+                    self._close_driver(force=True)
+                    self._init_driver()
+
                 logger.info(f"\n[{i}/{len(cars)}] Rechecking: {car.year} {car.make} {car.model}")
                 logger.info(f"  Website: {car.source_website}")
                 logger.info(f"  Marked unavailable: {car.marked_unavailable_at}")
@@ -737,7 +846,7 @@ class AvailabilityChecker:
         
         finally:
             session.close()
-            self._close_driver()
+            self._close_driver(force=True)
 
 
 def main():
@@ -748,6 +857,8 @@ def main():
     parser.add_argument('--limit', type=int, help='Max number of cars to check')
     parser.add_argument('--visible', action='store_true', help='Show browser (not headless)')
     parser.add_argument('--no-alternatives', action='store_true', help='Skip scraping alternatives for unavailable cars')
+    parser.add_argument('--within-budget', action='store_true', help='Only check cars within configured max price')
+    parser.add_argument('--ignore-budget', action='store_true', help='Check cars regardless of budget filter')
     
     args = parser.parse_args()
     
@@ -765,6 +876,11 @@ def main():
     
     if args.all:
         filters['all'] = True
+
+    if args.within_budget:
+        filters['within_budget'] = True
+    elif args.ignore_budget:
+        filters['within_budget'] = False
     
     # Validate: need at least one filter
     if not filters:
