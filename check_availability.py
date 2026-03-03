@@ -876,7 +876,10 @@ def main():
         checker.config.get('availability_checker', {}).get('check_within_budget_only', False)
     )
     
-    checker.check_and_update_availability(filters, within_budget=within_budget)
+    # Add within_budget to filters dict
+    filters["within_budget"] = within_budget
+    
+    checker.check_and_update_availability(filters)
 
 
 if __name__ == "__main__":
