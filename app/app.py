@@ -402,7 +402,7 @@ def check_car_availability():
             'limit': max_cars
         }
         
-        result = checker.check_and_update_availability(filters)
+        result = checker.check_and_update_availability(filters, within_budget=True)
         
         # Handle case where result is None (no cars to check)
         if result is None:

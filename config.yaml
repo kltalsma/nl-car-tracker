@@ -406,6 +406,9 @@ availability_checker:
   scrape_alternatives: true
   notify_on_preferred_unavailable: true
   max_cars_per_run: 100
+  check_within_budget_only: true  # Only check cars within max_price limit
+  remove_unavailable_from_db: true  # Hard-delete unavailable cars instead of marking
+  driver_restart_interval: 250  # Restart Chrome every N cars to prevent crashes
   recheck_unavailable:
     enabled: true
     check_interval_hours: 168

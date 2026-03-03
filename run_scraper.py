@@ -253,7 +253,8 @@ def run_continuous_scraping():
                         filters={
                             'older_than_days': days_threshold,
                             'limit': max_cars
-                        }
+                        },
+                        within_budget=True  # Only check cars within configured budget
                     )
                     
                     check_duration = (datetime.now() - check_start).total_seconds()

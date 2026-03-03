@@ -39,6 +39,9 @@ from PIL import Image
 import pytesseract
 import io
 import re
+from selenium.common.exceptions import WebDriverException
+import tempfile
+import shutil
 
 # Configure logging
 logging.basicConfig(
@@ -89,6 +92,7 @@ class AvailabilityChecker:
         self.config_path = config_path
         self.headless = headless
         self.driver = None
+        self._chrome_temp_dir = None
         self.scrape_alternatives = scrape_alternatives
         self.autoscout24_scraper = None
         
@@ -145,9 +149,13 @@ class AvailabilityChecker:
         self.cookies_loaded = set()
     
     def _init_driver(self):
-        """Initialize Selenium WebDriver"""
+        """Initialize Chrome WebDriver with dedicated temp directory"""
         if self.driver:
-            return
+            self._close_driver(force=True)
+        
+        # Create dedicated temp directory for this Chrome session
+        os.makedirs('tmp/chrome_availability', exist_ok=True)
+        self._chrome_temp_dir = tempfile.mkdtemp(prefix="session_", dir="tmp/chrome_availability")
         
         options = Options()
         if self.headless:
@@ -156,16 +164,36 @@ class AvailabilityChecker:
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_argument('user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36')
+        options.add_argument(f'--user-data-dir={self._chrome_temp_dir}')
+        options.add_argument(f'--data-path={self._chrome_temp_dir}/data')
+        options.add_argument(f'--disk-cache-dir={self._chrome_temp_dir}/cache')
         
         self.driver = webdriver.Chrome(options=options)
         logger.info("WebDriver initialized")
     
-    def _close_driver(self):
-        """Close WebDriver"""
+    def _close_driver(self, force=False):
+        """Close Chrome WebDriver and cleanup temp directory"""
         if self.driver:
-            self.driver.quit()
-            self.driver = None
-            logger.info("WebDriver closed")
+            try:
+                if force:
+                    self.driver.quit()
+                else:
+                    self.driver.close()
+                    self.driver.quit()
+            except Exception as e:
+                print(f"Error closing driver: {e}")
+            finally:
+                self.driver = None
+        
+        # Cleanup temp directory
+        if self._chrome_temp_dir and os.path.exists(self._chrome_temp_dir):
+            try:
+                shutil.rmtree(self._chrome_temp_dir)
+                self._chrome_temp_dir = None
+            except Exception as e:
+                print(f"Warning: Could not remove temp directory {self._chrome_temp_dir}: {e}")
+        
+        logger.info("WebDriver closed")
     
     def load_cookies(self, website):
         """Load cookies from file to bypass privacy gates
@@ -493,14 +521,11 @@ class AvailabilityChecker:
                 session.rollback()
                 logger.error(f"  ⚠️  Error saving alternatives: {e}")
                 return 0
-            finally:
-                session.close()
-        
-        except Exception as e:
-            logger.error(f"  ⚠️  Error scraping alternatives: {e}")
-            return 0
+        finally:
+            session.close()
+            self._close_driver(force=True)
     
-    def check_and_update_availability(self, filters=None):
+    def check_and_update_availability(self, filters=None, within_budget=False):
         """
         Check availability for cars matching filters and update database
         
@@ -510,18 +535,42 @@ class AvailabilityChecker:
                 - website: Only check specific website
                 - limit: Max number of cars to check
                 - all: Check all available cars
+            within_budget: If True, only check cars within configured max_price
         """
         session = self.db.get_session()
         
         try:
-            # Build query
-            query = session.query(Car).filter(Car.is_available == True)
+            # Get user requirements from config (same as web UI)
+            user_reqs = {
+                "min_price": self.config.get("search_criteria", {}).get("min_price", 15000),
+                "max_price": self.config.get("search_criteria", {}).get("max_price", 35000),
+                "acceptable_year": self.config.get("search_criteria", {}).get("acceptable_year", 2020),
+                "max_mileage_acceptable": self.config.get("search_criteria", {}).get("max_mileage_acceptable", 100000)
+            }
+            
+            # Build query with SAME filters as web UI base_query
+            # This ensures we only check cars that would actually appear in search results
+            query = session.query(Car).filter(
+                Car.is_available == True,
+                Car.price >= user_reqs["min_price"],
+                Car.price <= user_reqs["max_price"],
+                Car.year >= user_reqs["acceptable_year"],
+                Car.mileage_km < user_reqs["max_mileage_acceptable"],
+                Car.fuel_type.in_(["Full Electric", "PHEV", "Hybrid"]),
+                Car.distance_from_heerenveen_km <= 80,
+                Car.dealer_name != "Basisgegevens"  # Exclude private sellers
+            )
+            
+            logger.info(f"Filtering cars with criteria: price €{user_reqs['min_price']:,}-€{user_reqs['max_price']:,}, "
+                       f"year >= {user_reqs['acceptable_year']}, mileage < {user_reqs['max_mileage_acceptable']:,}km, "
+                       f"EV/PHEV/Hybrid only, ≤80km from Heerenveen, no private sellers")
             
             if filters:
                 # Filter by website
                 if filters.get('website'):
                     query = query.filter(Car.source_website == filters['website'])
                 
+                # Filter by age
                 # Filter by age
                 if filters.get('older_than_days'):
                     cutoff_date = datetime.utcnow() - timedelta(days=filters['older_than_days'])
@@ -537,7 +586,6 @@ class AvailabilityChecker:
             if not cars:
                 logger.info("No cars match the filters")
                 return {"cars_checked": 0, "cars_marked_unavailable": 0, "still_available": 0, "errors": 0}
-                return
             
             logger.info(f"\n{'='*60}")
             logger.info(f"CHECKING AVAILABILITY FOR {len(cars)} CARS")
@@ -545,6 +593,9 @@ class AvailabilityChecker:
             
             # Initialize browser
             self._init_driver()
+            
+            # Get driver restart interval from config
+            driver_restart_interval = self.config.get('availability_checker', {}).get('driver_restart_interval', 250)
             
             # Check each car
             checked = 0
@@ -559,7 +610,28 @@ class AvailabilityChecker:
                 logger.info(f"  Last seen: {car.last_seen}")
                 logger.info(f"  URL: {car.listing_url[:80]}...")
                 
-                result = self.check_car_availability(car)
+                # Periodic WebDriver restart to prevent crashes
+                if i > 1 and i % driver_restart_interval == 0:
+                    logger.info(f"  🔄 Restarting WebDriver after {driver_restart_interval} cars...")
+                    self._close_driver(force=True)
+                    self._init_driver()
+                
+                # Check availability with retry logic
+                result = None
+                max_retries = 2
+                for attempt in range(max_retries):
+                    try:
+                        result = self.check_car_availability(car)
+                        break
+                    except WebDriverException as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"  ⚠️  WebDriver error (attempt {attempt + 1}/{max_retries}): {e}")
+                            logger.info(f"  🔄 Restarting WebDriver and retrying...")
+                            self._close_driver(force=True)
+                            self._init_driver()
+                        else:
+                            logger.error(f"  ❌ WebDriver failed after {max_retries} attempts: {e}")
+                            result = None
                 
                 if result is None:
                     errors += 1
@@ -572,7 +644,13 @@ class AvailabilityChecker:
                         marked_unavailable += 1
                         logger.info(f"  ➡️  Marked as UNAVAILABLE in database (reason: {reason})")
                         
-                        # Commit immediately after marking unavailable
+                        # Check if we should remove from database
+                        remove_unavailable = self.config.get('availability_checker', {}).get('remove_unavailable_from_db', False)
+                        if remove_unavailable:
+                            session.delete(car)
+                            logger.info(f"  🗑️  Removed from database")
+                        
+                        # Commit immediately after marking/removing unavailable
                         session.commit()
                         
                         # Scrape alternatives for AutoScout24 listings
@@ -616,7 +694,7 @@ class AvailabilityChecker:
         
         finally:
             session.close()
-            self._close_driver()
+            self._close_driver(force=True)
     
     def check_unavailable_cars(self, filters=None):
         """
@@ -737,7 +815,7 @@ class AvailabilityChecker:
         
         finally:
             session.close()
-            self._close_driver()
+            self._close_driver(force=True)
 
 
 def main():
@@ -748,6 +826,8 @@ def main():
     parser.add_argument('--limit', type=int, help='Max number of cars to check')
     parser.add_argument('--visible', action='store_true', help='Show browser (not headless)')
     parser.add_argument('--no-alternatives', action='store_true', help='Skip scraping alternatives for unavailable cars')
+    parser.add_argument('--within-budget', action='store_true', help='Only check cars within configured max_price')
+    parser.add_argument('--ignore-budget', action='store_true', help='Check all cars regardless of price')
     
     args = parser.parse_args()
     
@@ -777,7 +857,14 @@ def main():
         headless=not args.visible,
         scrape_alternatives=not args.no_alternatives
     )
-    checker.check_and_update_availability(filters)
+    
+    # Determine budget filtering
+    within_budget = args.within_budget or (
+        not args.ignore_budget and 
+        checker.config.get('availability_checker', {}).get('check_within_budget_only', False)
+    )
+    
+    checker.check_and_update_availability(filters, within_budget=within_budget)
 
 
 if __name__ == "__main__":
