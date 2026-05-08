@@ -12,32 +12,53 @@
 {% macro render_car_card(car, item, tier, total_critical, config, trade_in_value=None) %}
 <div class="col">
     <div class="card car-card h-100">
+        {% set _img = car|car_image %}
+        {% if _img %}
+        <img src="{{ _img }}" loading="lazy" alt="{{ car.make }} {{ car.model }}" class="card-img-top">
+        {% else %}
+        <div class="card-img-top no-photo-placeholder"><i class="bi bi-camera-video-off"></i><span>No photo</span></div>
+        {% endif %}
         <div class="card-body">
             <div class="d-flex justify-content-between align-items-start mb-2">
-                <h5 class="card-title mb-0">{{ car.make }} {{ car.model }}</h5>
-                
-                {# Tier-specific badge #}
-                {% if tier == 'perfect' %}
-                    <span class="match-score"
-                      {% if item.breakdown %}
-                      data-bs-toggle="tooltip" 
-                      data-bs-placement="top"
-                      data-bs-html="true"
-                      title="Score Breakdown:<br>
-                             Critical Features: {{ '%.1f'|format(item.breakdown["critical_features"]["weighted"]) }}/45<br>
-                             Price: {{ '%.1f'|format(item.breakdown["price"]["weighted"]) }}/20<br>
-                             Mileage: {{ '%.1f'|format(item.breakdown["mileage"]["weighted"]) }}/15<br>
-                             Distance: {{ '%.1f'|format(item.breakdown["distance"]["weighted"]) }}/10<br>
-                             Age: {{ '%.1f'|format(item.breakdown["age"]["weighted"]) }}/5<br>
-                             Range: {{ '%.1f'|format(item.breakdown["range"]["weighted"]) }}/5<br>
-                             {% if item.breakdown.get('bonuses', []) %}Bonuses: {% for bonus in item.breakdown.get('bonuses', []) %}{{ bonus.name }} (+{{ '%.1f'|format(bonus.value) }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}"
-                      {% endif %}
-                      >{{ item.match_score }}</span>
-                {% elif tier == 'great' %}
-                    <span class="badge bg-primary">{{ (item.critical_features.values()|select|list|length) }}/{{ total_critical }}</span>
-                {% elif tier == 'good' %}
-                    <span class="badge bg-info">{{ (item.critical_features.values()|select|list|length) }}/{{ total_critical }}</span>
-                {% endif %}
+                <div>
+                    <h5 class="card-title mb-0">{{ car.make }} {{ car.model }}</h5>
+                    <div class="small mt-1">
+                        {# Tier-specific badge #}
+                        {% if tier == 'perfect' %}
+                            <span class="match-score"
+                              {% if item.breakdown %}
+                              data-bs-toggle="tooltip" 
+                              data-bs-placement="top"
+                              data-bs-html="true"
+                              title="Score Breakdown:<br>
+                                     Critical Features: {{ '%.1f'|format(item.breakdown["critical_features"]["weighted"]) }}/45<br>
+                                     Price: {{ '%.1f'|format(item.breakdown["price"]["weighted"]) }}/20<br>
+                                     Mileage: {{ '%.1f'|format(item.breakdown["mileage"]["weighted"]) }}/15<br>
+                                     Distance: {{ '%.1f'|format(item.breakdown["distance"]["weighted"]) }}/10<br>
+                                     Age: {{ '%.1f'|format(item.breakdown["age"]["weighted"]) }}/5<br>
+                                     Range: {{ '%.1f'|format(item.breakdown["range"]["weighted"]) }}/5<br>
+                                     {% if item.breakdown.get('bonuses', []) %}Bonuses: {% for bonus in item.breakdown.get('bonuses', []) %}{{ bonus.name }} (+{{ '%.1f'|format(bonus.value) }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}"
+                              {% endif %}
+                              >{{ item.match_score }}</span>
+                        {% elif tier == 'great' %}
+                            <span class="badge bg-primary">{{ (item.critical_features.values()|select|list|length) }}/{{ total_critical }}</span>
+                        {% elif tier == 'good' %}
+                            <span class="badge bg-info">{{ (item.critical_features.values()|select|list|length) }}/{{ total_critical }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="text-end small">
+                    {% if car.score %}<span class="badge bg-primary">Score {{ '%.0f'|format(car.score) }}</span>{% endif %}
+                    {% if car.price_trend %}
+                    <span class="badge bg-light text-dark ms-1">
+                        {% if car.price_trend == 'up' %}↑{% elif car.price_trend == 'down' %}↓{% else %}→{% endif %}
+                        {% if car.price_trend_delta %}€{{ '%.0f'|format(car.price_trend_delta) }}{% endif %}
+                    </span>
+                    {% endif %}
+                    {% if car.completeness_ratio is defined %}
+                    <span class="badge bg-success ms-1">{{ (car.completeness_ratio*100)|round(0) }}% complete</span>
+                    {% endif %}
+                </div>
             </div>
             
             <p class="text-muted small mb-2">
@@ -149,7 +170,7 @@
                 <div class="mb-1">
                     <i class="bi bi-briefcase-fill"></i> 
                     {% if car.storage_capacity_liters %}
-                        {{ car.storage_capacity_liters }}L{% if car.storage_capacity_seats_down_liters %} / {{ car.storage_capacity_seats_down_liters }}L{% endif %} boot
+                        {{ car.storage_capacity_liters }}L boot
                     {% else %}
                         <span class="text-muted">Could not be determined</span>
                     {% endif %}

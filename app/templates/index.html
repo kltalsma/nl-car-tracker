@@ -3,18 +3,140 @@
 
 {% block title %}Car Listings - NL Car Tracker{% endblock %}
 
+{% block extra_css %}
+<style>
+    .skeleton-card { background: #f8f9fa; border: 1px solid #e6e6e6; }
+    .skeleton { position: relative; overflow: hidden; background: #e6e6e6; border-radius: 4px; }
+    .skeleton.line { height: 14px; }
+    .skeleton::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.6) 50%, rgba(255,255,255,0) 100%); animation: shimmer 1.4s infinite; }
+    @keyframes shimmer { 100% { transform: translateX(100%);} }
+    .data-loaded #skeleton-cards { display: none !important; }
+    .data-loaded .car-listings-container { display: flex !important; flex-wrap: wrap; }
+    .car-card { transition: box-shadow 0.2s ease, transform 0.2s ease; }
+    .car-card:hover { box-shadow: 0 10px 24px rgba(0,0,0,0.08); transform: translateY(-2px); }
+    .car-card img { aspect-ratio: 4 / 3; object-fit: cover; width: 100%; border-radius: 8px; background: #f2f2f2; }
+    .card-header-compact { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+    .card-header-compact .title { font-weight: 700; font-size: 1.05rem; margin: 0; }
+    .card-header-compact .badges span { margin-left: 4px; }
+    /* Sidebar polishing */
+    .filters-shell { position: sticky; top: 1rem; }
+    .filters-panel { background: #ffffff; border: 1px solid #e6e6e6; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 12px; }
+    .filters-toggle { display: none; }
+    @media (max-width: 991px) {
+        .filters-shell { position: static; }
+        .filters-panel { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1050; overflow-y: auto; border-radius: 0; padding: 16px 16px 80px; }
+        .filters-panel.open { display: block; }
+        .filters-toggle { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+        .filters-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 1040; }
+        .filters-backdrop.open { display: block; }
+        .filters-close { position: absolute; top: 8px; right: 8px; }
+    }
+    /* Active filter chips */
+    .filter-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    .filter-chip { display: inline-flex; align-items: center; gap: 4px; background: #eef2ff; color: #1e3a8a; border: 1px solid #c7d2fe; padding: 4px 10px; border-radius: 999px; font-size: 0.85rem; text-decoration: none; }
+    .filter-chip:hover { background: #e0e7ff; color: #1e3a8a; }
+    .filter-chip .x { color: #6366f1; font-weight: bold; }
+    .filter-chip-clear { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+    /* No-photo placeholder */
+    .no-photo-placeholder { aspect-ratio: 4 / 3; background: #f1f3f5; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #adb5bd; gap: 6px; border-radius: 8px; }
+    .no-photo-placeholder i { font-size: 2.5rem; }
+    .no-photo-placeholder span { font-size: 0.85rem; }
+    /* Density toggle */
+    body.density-compact .car-card .card-body { padding: 0.6rem; }
+    body.density-compact .car-card .card-img-top { aspect-ratio: 16 / 9; }
+    body.density-compact .car-card .feature-badge { font-size: 0.7rem; padding: 0.15rem 0.4rem; }
+    body.density-compact .car-card h5.title, body.density-compact .car-card .card-title { font-size: 0.95rem; }
+    /* Toolbar */
+    .listings-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+    .listings-toolbar .toolbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .listings-toolbar select { min-width: 160px; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row">
     <!-- Unified Sidebar -->
     <div class="col-md-3">
-        {{ render_sidebar(config, user_reqs=user_reqs, stats=stats, available_makes=available_makes, available_models=available_models, request_args=request.args, trade_in_value=trade_in_value, show_filters=True) }}
+        <button class="btn btn-outline-secondary btn-sm filters-toggle" type="button" onclick="document.querySelector('.filters-panel').classList.toggle('open'); document.querySelector('.filters-backdrop').classList.toggle('open');">
+            <i class="bi bi-funnel"></i> Filters
+        </button>
+        <div class="filters-backdrop" onclick="document.querySelector('.filters-panel').classList.remove('open'); this.classList.remove('open');"></div>
+        <div class="filters-shell">
+            <div class="filters-panel">
+                <button type="button" class="btn btn-sm btn-outline-secondary filters-close d-lg-none" onclick="document.querySelector('.filters-panel').classList.remove('open'); document.querySelector('.filters-backdrop').classList.remove('open');"><i class="bi bi-x-lg"></i></button>
+                {{ render_sidebar(config, user_reqs=user_reqs, stats=stats, available_makes=available_makes, available_models=available_models, request_args=request.args, trade_in_value=trade_in_value, show_filters=True) }}
+            </div>
+        </div>
     </div>
 
     <!-- Main content area with car listings -->
     <div class="col-md-9">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <h3><i class="bi bi-car-front"></i> Car Listings</h3>
-            <span class="badge bg-secondary">{{ total_cars }} results</span>
+        <div class="listings-toolbar">
+            <h3 class="mb-0"><i class="bi bi-car-front"></i> Car Listings <span class="badge bg-secondary">{{ total_cars }} results</span></h3>
+            <div class="toolbar-actions">
+                <a href="/admin#exclusions" class="btn btn-outline-warning btn-sm" id="exclusions-link" title="Manage excluded models" style="display:none;">
+                    <i class="bi bi-funnel-fill"></i> <span id="exclusions-badge-count">0</span> exclusions
+                </a>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="density-toggle" title="Toggle compact view">
+                    <i class="bi bi-grid"></i> <span id="density-label">Compact</span>
+                </button>
+                <select class="form-select form-select-sm" id="sortSelect" onchange="applySort(this.value)">
+                    <option value="last_seen" {% if request.args.get('sort_by','last_seen') == 'last_seen' %}selected{% endif %}>Newest first</option>
+                    <option value="score" {% if request.args.get('sort_by') == 'score' %}selected{% endif %}>Best score</option>
+                    <option value="price_asc" {% if request.args.get('sort_by') == 'price_asc' %}selected{% endif %}>Price: low to high</option>
+                    <option value="price_desc" {% if request.args.get('sort_by') == 'price_desc' %}selected{% endif %}>Price: high to low</option>
+                    <option value="distance" {% if request.args.get('sort_by') == 'distance' %}selected{% endif %}>Distance (closest)</option>
+                    <option value="features" {% if request.args.get('sort_by') == 'features' %}selected{% endif %}>Features count</option>
+                </select>
+            </div>
+        </div>
+
+        {# Active filter chips #}
+        {% set filter_labels = {
+            'vehicle_type': 'Type',
+            'fuel_type': 'Fuel',
+            'make': 'Make',
+            'model': 'Model',
+            'min_year': 'Year ≥',
+            'max_year': 'Year ≤',
+            'min_price': 'Price ≥ €',
+            'max_price': 'Price ≤ €',
+            'min_mileage': 'Mileage ≥',
+            'max_mileage': 'Mileage ≤',
+            'max_distance': 'Within km',
+            'min_storage': 'Boot ≥ L',
+            'only_complete': 'Complete only',
+            'sort_by': 'Sort'
+        } %}
+        {% set has_active = false %}
+        {% for k, v in request.args.items() %}{% if k in filter_labels and v and v != 'last_seen' %}{% set has_active = true %}{% endif %}{% endfor %}
+        {% if has_active %}
+        <div class="filter-chips">
+            <span class="text-muted small me-1" style="align-self:center;">Active filters:</span>
+            {% for k, v in request.args.items() %}
+                {% if k in filter_labels and v and not (k == 'sort_by' and v == 'last_seen') %}
+                <a class="filter-chip" href="?{% for kk, vv in request.args.items() %}{% if kk != k and kk != 'page' %}{{ kk }}={{ vv }}&{% endif %}{% endfor %}" title="Remove this filter">
+                    <strong>{{ filter_labels[k] }}:</strong> {{ v }} <span class="x">×</span>
+                </a>
+                {% endif %}
+            {% endfor %}
+            <a class="filter-chip filter-chip-clear" href="/" title="Clear all filters">Clear all <span class="x">×</span></a>
+        </div>
+        {% endif %}
+        <div id="skeleton-cards" class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-3">
+            {% for _ in range(6) %}
+            <div class="col">
+                <div class="card car-card skeleton-card">
+                    <div class="card-body">
+                        <div class="skeleton line w-75 mb-2"></div>
+                        <div class="skeleton line w-50 mb-3"></div>
+                        <div class="skeleton line w-100 mb-2"></div>
+                        <div class="skeleton line w-80 mb-2"></div>
+                        <div class="skeleton line w-60 mb-2"></div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
         </div>
 
         {% if cars %}
@@ -22,8 +144,28 @@
             {% for car in cars %}
             <div class="col">
                 <div class="card car-card">
+                    {% set _img = car|car_image %}
+                    {% if _img %}
+                    <img src="{{ _img }}" loading="lazy" alt="{{ car.make }} {{ car.model }}" class="card-img-top">
+                    {% else %}
+                    <div class="card-img-top no-photo-placeholder"><i class="bi bi-camera-video-off"></i><span>No photo</span></div>
+                    {% endif %}
                     <div class="card-body">
-                        <h5 class="card-title mb-2">{{ car.make }} {{ car.model }}</h5>
+                        <div class="card-header-compact mb-2">
+                            <h5 class="title">{{ car.make }} {{ car.model }}</h5>
+                            <div class="badges text-end">
+                                {% if car.score %}<span class="badge bg-primary">Score {{ '%.0f'|format(car.score) }}</span>{% endif %}
+                                {% if car.price_trend %}
+                                <span class="badge bg-light text-dark">
+                                    {% if car.price_trend == 'up' %}↑{% elif car.price_trend == 'down' %}↓{% else %}→{% endif %}
+                                    {% if car.price_trend_delta %}€{{ '%.0f'|format(car.price_trend_delta) }}{% endif %}
+                                </span>
+                                {% endif %}
+                                {% if car.completeness_ratio is defined %}
+                                <span class="badge bg-success">{{ (car.completeness_ratio*100)|round(0) }}% complete</span>
+                                {% endif %}
+                            </div>
+                        </div>
                         <p class="text-muted small mb-2">{{ car.year }} • {{ car.fuel_type }}</p>
                         
                         <div class="price-tag mb-3">{{ car.price | format_price }}</div>
@@ -141,7 +283,7 @@
                         {% else %}
                         <div class="mb-2">
                             <span class="badge badge-partial">
-                                {{ car.features_count }}/9 Features
+                                {{ car.features_count or 0 }}/32 Features
                             </span>
                             {% if car.score %}
                             <span class="badge bg-secondary"
@@ -219,8 +361,21 @@
         {% endif %}
 
         {% else %}
-        <div class="alert alert-info" role="alert">
-            <i class="bi bi-info-circle"></i> No cars found matching your criteria. Try adjusting the filters.
+        <div class="alert alert-warning" role="alert">
+            <h5 class="alert-heading"><i class="bi bi-search"></i> No cars match your filters</h5>
+            <p class="mb-2">Try one of these to broaden the search:</p>
+            <ul class="mb-3">
+                {% if request.args.get('max_price') %}<li>Increase max price (currently €{{ request.args.get('max_price') }})</li>{% endif %}
+                {% if request.args.get('min_year') %}<li>Lower minimum year (currently {{ request.args.get('min_year') }})</li>{% endif %}
+                {% if request.args.get('max_mileage') %}<li>Increase max mileage (currently {{ request.args.get('max_mileage') }} km)</li>{% endif %}
+                {% if request.args.get('max_distance') %}<li>Expand search radius (currently {{ request.args.get('max_distance') }} km)</li>{% endif %}
+                {% if request.args.get('make') %}<li>Remove make filter ({{ request.args.get('make') }})</li>{% endif %}
+                {% if request.args.get('vehicle_type') %}<li>Try other vehicle types ({{ request.args.get('vehicle_type') }} only right now)</li>{% endif %}
+                {% if request.args.get('only_complete') %}<li>Allow incomplete records (currently requiring all features)</li>{% endif %}
+                <li>Or <a href="/" class="alert-link">clear all filters</a></li>
+            </ul>
+            <hr>
+            <small class="text-muted">Total cars in database: {{ stats.total_ever }} | Available: {{ stats.total_available }}</small>
         </div>
         {% endif %}
     </div>
@@ -236,6 +391,8 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    document.body.classList.add('data-loaded');
+    document.querySelectorAll('.car-listings-container').forEach(el => el.classList.remove('d-none'));
     // Initialize Bootstrap tooltips for score breakdowns
     var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
     var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
@@ -243,16 +400,53 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     const makeFilter = document.getElementById('makeFilter');
-    
-    // When make selection changes, submit the form to reload models
     if (makeFilter) {
         makeFilter.addEventListener('change', function() {
-            // Clear model selection when make changes
             document.getElementById('modelFilter').value = '';
-            // Submit the form to reload with new make filter
             document.getElementById('filterForm').submit();
         });
     }
+
+    // Density toggle
+    const densityBtn = document.getElementById('density-toggle');
+    const densityLabel = document.getElementById('density-label');
+    const applyDensity = (mode) => {
+        if (mode === 'compact') {
+            document.body.classList.add('density-compact');
+            if (densityLabel) densityLabel.textContent = 'Comfortable';
+        } else {
+            document.body.classList.remove('density-compact');
+            if (densityLabel) densityLabel.textContent = 'Compact';
+        }
+    };
+    applyDensity(localStorage.getItem('cardDensity') || 'comfortable');
+    if (densityBtn) {
+        densityBtn.addEventListener('click', () => {
+            const next = document.body.classList.contains('density-compact') ? 'comfortable' : 'compact';
+            localStorage.setItem('cardDensity', next);
+            applyDensity(next);
+        });
+    }
+
+    // Exclusions count badge
+    fetch('/api/exclusions')
+        .then(r => r.json())
+        .then(d => {
+            const link = document.getElementById('exclusions-link');
+            const badge = document.getElementById('exclusions-badge-count');
+            if (link && badge && d.exclusions && d.exclusions.length) {
+                badge.textContent = d.exclusions.length;
+                link.style.display = 'inline-flex';
+            }
+        })
+        .catch(() => {});
 });
+
+function applySort(value) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('sort_by', value);
+    url.searchParams.delete('page');
+    window.location.href = url.toString();
+}
 </script>
 {% endblock %}

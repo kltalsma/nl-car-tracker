@@ -6,10 +6,14 @@ from geopy.distance import geodesic
 from geopy.exc import GeocoderTimedOut
 from typing import Optional, Tuple
 import logging
+import re
 import time
 import yaml
 import os
 import requests
+import hashlib
+import unicodedata
+from urllib.parse import urlparse
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
@@ -40,6 +44,82 @@ try:
 except Exception as e:
     logger.warning(f"Could not load vehicle classification config: {e}")
     _vehicle_classification = {}
+
+
+# --- Normalization & canonical helpers ---
+
+_MODEL_ALIASES = {
+    'ix1': 'x1',
+    'ix3': 'x3',
+    'c5 x': 'c5x',
+    'c5x': 'c5x',
+    'e-3008': '3008',
+    'e-5008': '5008',
+    'e-2008': '2008',
+    'en-yaq': 'enyaq',
+    'en yac': 'enyaq',
+    'q4 e-tron': 'q4 e-tron',
+    'q4 etron': 'q4 e-tron',
+    't roc': 't-roc',
+    'troc': 't-roc',
+    'sportage phev': 'sportage',
+    'outlander phev': 'outlander',
+    'b-z4x': 'bz4x',
+    'bZ4X': 'bz4x',
+}
+
+
+def _strip_accents(text: str) -> str:
+    nfd = unicodedata.normalize('NFD', text or '')
+    return ''.join(ch for ch in nfd if unicodedata.category(ch) != 'Mn')
+
+
+def normalize_make_model(make: Optional[str], model: Optional[str]) -> Tuple[str, str]:
+    make_norm = _strip_accents(make or '').strip().lower()
+    model_norm = _strip_accents(model or '').strip().lower()
+
+    # Collapse multiple spaces/dashes
+    model_norm = re.sub(r"[\s_-]+", " ", model_norm).strip()
+    make_norm = re.sub(r"[\s_-]+", " ", make_norm).strip()
+
+    # Trim common trim suffixes
+    trim_suffixes = ['gt-line', 'gt line', 'r-dynamic', 'r dynamic', 'amg line', 'm sport', 's-line', 's line']
+    for suf in trim_suffixes:
+        if model_norm.endswith(suf):
+            model_norm = model_norm[: -len(suf)].strip()
+            break
+
+    # Apply alias map
+    if model_norm in _MODEL_ALIASES:
+        model_norm = _MODEL_ALIASES[model_norm]
+
+    # Title-case make for storage consistency
+    make_out = make_norm.upper() if make_norm in ['bmw', 'mg', 'cupra', 'seat'] else make_norm.title()
+    model_out = model_norm.title()
+    return make_out, model_out
+
+
+def compute_canonical_id(make: str, model: str, year: Optional[int] = None,
+                          vin: Optional[str] = None, license_plate: Optional[str] = None,
+                          listing_url: Optional[str] = None) -> str:
+    make_norm, model_norm = normalize_make_model(make, model)
+    parts = [make_norm, model_norm]
+    if year:
+        parts.append(str(year))
+    if license_plate:
+        parts.append(license_plate.replace(' ', '').upper())
+    if vin:
+        parts.append(vin.strip().upper())
+    if listing_url:
+        try:
+            parsed = urlparse(listing_url)
+            parts.append(parsed.netloc.lower())
+            if parsed.path:
+                parts.append(parsed.path.strip('/'))
+        except Exception:
+            parts.append(listing_url)
+    key = '::'.join([p for p in parts if p])
+    return hashlib.sha1(key.encode('utf-8')).hexdigest()
 
 
 def extract_city_from_address(address: str) -> Optional[str]:
@@ -588,6 +668,12 @@ def normalize_fuel_type(fuel_type_str: str, model_str: str = None) -> Optional[s
         logger.debug(f"Excluding mild hybrid: {fuel_type_str}")
         return None  # Exclude mild hybrids
     
+    # Known PHEV-only makes/models: classify as PHEV regardless of fuel_type string
+    if model_str:
+        _make_model = model_str.lower()
+        if 'lynk' in _make_model:
+            return "PHEV"
+
     # Check for PHEV first (before rejecting benzine)
     # Dutch sites often use "Hybride benzine" or "Benzine hybrid"
     if any(term in fuel_lower for term in ['hybride benzine', 'benzine hybride', 'hybrid benzine', 'benzine hybrid', 'phev', 'plug-in', 'plugin', 'plug in']):
@@ -617,6 +703,14 @@ def normalize_fuel_type(fuel_type_str: str, model_str: str = None) -> Optional[s
     if any(term in fuel_lower for term in ['electric', 'elektrisch', 'ev', 'bev']):
         if 'plug' in fuel_lower or 'hybrid' in fuel_lower or 'phev' in fuel_lower:
             return "PHEV"
+        # Check model string for PHEV indicators (engine codes like '1.4', 'iV', 'gte', 'tfsi e')
+        if model_str:
+            model_lower_check = model_str.lower()
+            phev_model_indicators = ['-iv', 'gte', 'tfsi e', 'tsi e', 'plug', 'phev', 'hybrid']
+            engine_pattern = re.search(r'\b[12]\.[0-9]', model_lower_check)
+            if engine_pattern or any(ind in model_lower_check for ind in phev_model_indicators):
+                logger.debug(f"Model '{model_str}' with fuel 'elektrisch' reclassified as PHEV")
+                return "PHEV"
         return "Full Electric"
     
     # PHEV variants
@@ -714,9 +808,11 @@ def should_exclude_vehicle(make_str: str, model_str: str) -> bool:
     
     import re
     
-    exclude_models = _vehicle_classification.get('exclude_models', {})
-    if make_str in exclude_models:
-        model_keywords = exclude_models[make_str]
+    exclude_models_raw = _vehicle_classification.get('exclude_models', {})
+    exclude_models = {str(k).lower(): v for k, v in exclude_models_raw.items()}
+    make_lower_key = str(make_str).lower()
+    if make_lower_key in exclude_models:
+        model_keywords = exclude_models[make_lower_key]
         # If the list is empty, exclude all models from this make
         if not model_keywords:
             return True
@@ -1887,4 +1983,3 @@ def find_duplicate_cars(car, db_session, threshold_km=5000, price_diff_pct=10):
     ).all()
     
     return duplicates
-
