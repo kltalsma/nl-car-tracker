@@ -4642,6 +4642,44 @@ def track_interaction():
         return jsonify({'error': 'Internal server error'}), 500
 
 
+_PLACEHOLDER_IMAGE_PATTERNS = (
+    'seal-images',
+    '/logo',
+    '/logos/',
+    'bovag',
+    'placeholder',
+    'no-image',
+    'noimage',
+    'no_image',
+)
+
+def _is_real_car_image(url):
+    if not url or not isinstance(url, str):
+        return False
+    u = url.lower()
+    if any(p in u for p in _PLACEHOLDER_IMAGE_PATTERNS):
+        return False
+    return u.startswith('http')
+
+@app.template_filter('car_image')
+def car_image_filter(car):
+    primary = getattr(car, 'primary_image_url', None)
+    if _is_real_car_image(primary):
+        return primary
+    image_urls = getattr(car, 'image_urls', None)
+    if image_urls:
+        if isinstance(image_urls, str):
+            try:
+                image_urls = json.loads(image_urls)
+            except Exception:
+                image_urls = []
+        if isinstance(image_urls, list):
+            for u in image_urls:
+                if _is_real_car_image(u):
+                    return u
+    return ''
+
+
 @app.template_filter('format_price')
 def format_price(price):
     """Template filter for formatting prices"""

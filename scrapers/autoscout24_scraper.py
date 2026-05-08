@@ -23,6 +23,15 @@ import time
 import re
 
 
+
+PLACEHOLDER_IMAGE_TOKENS = ('seal-images', '/logo', 'bovag', 'placeholder', 'no-image', 'noimage')
+
+def _strip_placeholder_images(urls):
+    if not urls:
+        return urls
+    cleaned = [u for u in urls if u and not any(t in u.lower() for t in PLACEHOLDER_IMAGE_TOKENS)]
+    return cleaned or urls
+
 class AutoScout24Scraper(BaseScraper):
     """Scraper for autoscout24.nl"""
     
@@ -44,14 +53,22 @@ class AutoScout24Scraper(BaseScraper):
         # 5 pages = 100 results total
         num_pages = 5
         
+        # AutoScout24 body type codes (confirmed via actual API response bodyType values)
+        # Values from: bodyType:[{label:Hatchback,value:1},{label:SUV/Off-Road/Pick-Up,value:4},{label:Stationwagen,value:5},...]
+        vehicle_body_map = {
+            "SUV": 4,          # 4 = SUV/Off-Road/Pick-Up
+            "Stationwagon": 5, # 5 = Stationwagen/Combi
+        }
+
         # Build URL for each vehicle type and fuel type combination
         for vehicle_config in self.config['search']['vehicle_types']:
             vehicle_type = vehicle_config['type']
             max_price = vehicle_config['max_price']
-            
+            body_code = vehicle_body_map.get(vehicle_type)
+
             for fuel_config in self.config['search']['fuel_types']:
                 fuel_type = fuel_config['type']
-                
+
                 # Build URLs for multiple pages
                 for page_num in range(1, num_pages + 1):
                     # Map to AutoScout24 parameters
@@ -65,34 +82,32 @@ class AutoScout24Scraper(BaseScraper):
                         'priceto': max_price,
                         'kmto': self.config['search']['max_mileage_km'],
                         'fregfrom': self.config['search']['min_year'],
-                        # Note: Not using body filter as codes may vary - relying on keyword filtering instead
                     }
-                    
+
+                    # Add body type filter (pre-filters at URL level, avoids wasted Selenium visits)
+                    if body_code:
+                        params['body'] = body_code
+
                     # Add fuel type filter
                     # AutoScout24 fuel codes: E=Electric, 2=Hybrid/PHEV, H=Hydrogen (Waterstof)
                     # We want to exclude gasoline (B=Benzine) and diesel (D=Diesel)
                     if fuel_type == "Full Electric":
                         params['fuel'] = 'E'  # Electric only
                     elif fuel_type == "PHEV":
-                        # PHEV falls under Hybrid category in AutoScout24
-                        params['fuel'] = '2'  # Hybrid (includes PHEV - corrected from H to 2)
+                        params['fuel'] = '2'  # Hybrid (includes PHEV)
                     elif fuel_type == "Hybrid":
-                        params['fuel'] = '2'  # Hybrid (corrected from H to 2)
+                        params['fuel'] = '2'  # Hybrid
                     else:
-                        # For any other fuel type, still filter to electric/hybrid only
-                        # Use multiple fuel types: E (Electric) and 2 (Hybrid)
-                        # Note: AutoScout24 may not support multiple fuel params in one URL
-                        # So we'll rely on post-scraping filtering and set to Electric/Hybrid
-                        params['fuel'] = 'E,2'  # Electric and Hybrid (corrected H to 2)
-                    
+                        params['fuel'] = 'E,2'  # Electric and Hybrid
+
                     # Build URL string
                     param_str = '&'.join([f"{k}={v}" for k, v in params.items()])
                     url = f"{self.base_url}/lst?{param_str}"
                     urls.append(url)
-                    
+
                     self.logger.debug(f"Built URL for {vehicle_type} {fuel_type} page {page_num}: {url}")
-        
-        # Return only unique URLs (since we're using same fuel filter for both)
+
+        # Return only unique URLs
         return list(set(urls))
     
     def parse_listing_page(self, url: str) -> List[Dict]:
@@ -183,9 +198,28 @@ class AutoScout24Scraper(BaseScraper):
                         if title_text:
                             # Parse title (usually "Make Model Version")
                             title_parts = title_text.split()
-                            car_summary['make'] = title_parts[0] if len(title_parts) > 0 else "Unknown"
+                            # Multi-word makes that must not be split on the first word
+                            MULTI_WORD_MAKES = {
+                                ('lynk', '&', 'co'): 'Lynk & Co',
+                                ('alfa', 'romeo'): 'Alfa Romeo',
+                                ('land', 'rover'): 'Land Rover',
+                                ('aston', 'martin'): 'Aston Martin',
+                                ('rolls', 'royce'): 'Rolls-Royce',
+                            }
+                            detected_make = None
+                            make_len = 1
+                            for key, val in MULTI_WORD_MAKES.items():
+                                n = len(key)
+                                if len(title_parts) >= n and tuple(p.lower() for p in title_parts[:n]) == key:
+                                    detected_make = val
+                                    make_len = n
+                                    break
+                            if detected_make:
+                                car_summary['make'] = detected_make
+                            else:
+                                car_summary['make'] = title_parts[0] if len(title_parts) > 0 else "Unknown"
                             # Use normalize_model_name to extract clean model name
-                            raw_model = ' '.join(title_parts[1:]) if len(title_parts) > 1 else "Unknown"
+                            raw_model = ' '.join(title_parts[make_len:]) if len(title_parts) > make_len else "Unknown"
                             car_summary['model'] = normalize_model_name(raw_model) or "Unknown"
                             
                             # Filter out vans and commercial vehicles
@@ -219,10 +253,19 @@ class AutoScout24Scraper(BaseScraper):
                         ]
                         model_and_title = f"{car_summary.get('model', '')} {title_text}"
                         
-                        # Skip gasoline pattern check if this looks like an EV (has kWh battery size)
+                        # Skip gasoline pattern check if title contains PHEV/hybrid indicators.
+                        # Note: fuel_type is not yet parsed at this point, so we detect PHEV from
+                        # the title text directly. This catches cases like "1.4 TSI eHybrid" where
+                        # the engine code looks like gasoline but the car is a PHEV.
+                        phev_indicators = re.search(
+                            r'\b(e-?hybrid|phev|plug-?in|gte|iperformance|tfsi\s*e\b|tsi\s*e\b)',
+                            model_and_title, re.IGNORECASE
+                        )
+                        
+                        # Also skip if this looks like a full EV (has kWh battery size)
                         is_likely_ev = re.search(r'\d+\.?\d*\s*k?wh', model_and_title, re.IGNORECASE)
                         
-                        if not is_likely_ev and car_summary.get('fuel_type') not in ['PHEV', 'Hybrid']:
+                        if not is_likely_ev and not phev_indicators and car_summary.get('fuel_type') not in ['PHEV', 'Hybrid']:
                             for pattern in gasoline_patterns:
                                 if re.search(pattern, model_and_title):
                                     self.logger.info(f"  - Skipping: Gasoline engine pattern detected in '{model_and_title}'")
@@ -266,12 +309,12 @@ class AutoScout24Scraper(BaseScraper):
                         
                         if 'Waterstof' in listing_text:
                             car_summary['fuel_type'] = 'Hydrogen'
-                        elif 'Elektrisch' in listing_text:
-                            car_summary['fuel_type'] = 'Full Electric'
                         elif 'Plug-in hybride' in listing_text or 'Plug-in Hybride' in listing_text:
                             car_summary['fuel_type'] = 'PHEV'
                         elif 'Hybride' in listing_text:
                             car_summary['fuel_type'] = 'Hybrid'
+                        elif re.search(r'\bElektrisch\b(?! blauw| bereik| verstel| ramen| inklapbaar)', listing_text):
+                            car_summary['fuel_type'] = 'Full Electric'
                         elif 'Benzine' in listing_text and car_summary.get('fuel_type') is None and not is_hybrid_search_page:
                             # Skip benzine cars immediately (but only if not already identified as hybrid)
                             self.logger.info(f"  - Skipping benzine car: {car_summary['make']} {car_summary['model']}")
@@ -796,7 +839,19 @@ class AutoScout24Scraper(BaseScraper):
             if car_data.get('fuel_type') == 'Hybrid' and car_data.get('electric_range_km'):
                 car_data['fuel_type'] = 'PHEV'
                 self.logger.info(f"Upgraded Hybrid to PHEV (electric range: {car_data['electric_range_km']} km)")
-            
+
+            # Downgrade "Full Electric" to "PHEV" if range is suspiciously low (50-100 km)
+            # Check all available range fields: electric_range_km, wltp_reference_range_km, and range_km
+            # (range_km may hold the only range value when AS24 lists it as 'actieradius' without 'elektrisch bereik')
+            electric_range = (
+                car_data.get('electric_range_km')
+                or car_data.get('wltp_reference_range_km')
+                or car_data.get('range_km')
+            )
+            if car_data.get('fuel_type') == 'Full Electric' and electric_range and 50 <= electric_range <= 100:
+                car_data['fuel_type'] = 'PHEV'
+                self.logger.info(f"Downgraded 'Full Electric' to PHEV (suspicious low range: {electric_range} km)")
+
             # Check if vehicle should be excluded (too small for family use)
             if should_exclude_vehicle(car_data.get('make', ''), car_data.get('model', '')):
                 self.logger.info(f"Excluding small car: {car_data.get('make')} {car_data.get('model')}")
@@ -876,8 +931,26 @@ class AutoScout24Scraper(BaseScraper):
                             
                             if title_text:
                                 title_parts = title_text.split()
-                                car_summary['make'] = title_parts[0] if len(title_parts) > 0 else "Unknown"
-                                raw_model = ' '.join(title_parts[1:]) if len(title_parts) > 1 else "Unknown"
+                                MULTI_WORD_MAKES = {
+                                    ('lynk', '&', 'co'): 'Lynk & Co',
+                                    ('alfa', 'romeo'): 'Alfa Romeo',
+                                    ('land', 'rover'): 'Land Rover',
+                                    ('aston', 'martin'): 'Aston Martin',
+                                    ('rolls', 'royce'): 'Rolls-Royce',
+                                }
+                                detected_make = None
+                                make_len = 1
+                                for key, val in MULTI_WORD_MAKES.items():
+                                    n = len(key)
+                                    if len(title_parts) >= n and tuple(p.lower() for p in title_parts[:n]) == key:
+                                        detected_make = val
+                                        make_len = n
+                                        break
+                                if detected_make:
+                                    car_summary['make'] = detected_make
+                                else:
+                                    car_summary['make'] = title_parts[0] if len(title_parts) > 0 else "Unknown"
+                                raw_model = ' '.join(title_parts[make_len:]) if len(title_parts) > make_len else "Unknown"
                                 car_summary['model'] = normalize_model_name(raw_model)
                                 
                                 self.logger.debug(f"  - {car_summary['make']} {car_summary['model']}")
@@ -910,12 +983,12 @@ class AutoScout24Scraper(BaseScraper):
                                 car_summary['year'] = int(year_match.group(1))
                             
                             # Fuel type
-                            if 'Elektrisch' in listing_text:
-                                car_summary['fuel_type'] = 'Full Electric'
-                            elif 'Plug-in hybride' in listing_text or 'Plug-in Hybride' in listing_text:
+                            if 'Plug-in hybride' in listing_text or 'Plug-in Hybride' in listing_text:
                                 car_summary['fuel_type'] = 'PHEV'
                             elif 'Hybride' in listing_text:
                                 car_summary['fuel_type'] = 'Hybrid'
+                            elif re.search(r'\bElektrisch\b(?! blauw| bereik| verstel| ramen| inklapbaar)', listing_text):
+                                car_summary['fuel_type'] = 'Full Electric'
                             elif 'Benzine' in listing_text or 'Diesel' in listing_text:
                                 # Skip non-electric alternatives
                                 self.logger.info(f"  - Skipping non-electric alternative: {car_summary['make']} {car_summary['model']}")
