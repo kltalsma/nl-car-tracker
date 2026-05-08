@@ -28,8 +28,6 @@ vehicle_classification:
     Volkswagen:
     - ID.4
     - ID.5
-    - Tiguan
-    - T-Roc
     Kia:
     - e-Niro
     - Niro
@@ -37,6 +35,7 @@ vehicle_classification:
     - Sportage
     - EV5
     - EV9
+    - XCeed
     Hyundai:
     - Ioniq 5
     - Tucson
@@ -55,6 +54,9 @@ vehicle_classification:
     - '2008'
     - '3008'
     - '5008'
+    - '408'
+    - e-3008
+    - e-5008
     MINI:
     - Countryman
     - Aceman
@@ -71,6 +73,7 @@ vehicle_classification:
     - Ateca
     Skoda:
     - Enyaq
+    - Kodiaq
     Mazda:
     - MX-30
     - CX-30
@@ -86,6 +89,18 @@ vehicle_classification:
     - '2'
     - '3'
     - '4'
+    Jaguar:
+    - I-Pace
+    - I Pace
+    Citroen:
+    - C5 X
+    - C5X
+    - C4
+    - E-C4
+    Lynk & Co:
+    - '01'
+    Lynk:
+    - '01'
   stationwagon_models:
     Volkswagen:
     - Passat Variant
@@ -98,6 +113,8 @@ vehicle_classification:
     - 3 Series Touring
     - 5 Series Touring
     - i4 Touring
+    - 5 Serie
+    - 530
     Mercedes-Benz:
     - C-Class Estate
     - E-Class Estate
@@ -110,6 +127,7 @@ vehicle_classification:
     Skoda:
     - Octavia Combi
     - Superb Combi
+    - Superb
     Opel:
     - Astra Sports Tourer
     SEAT:
@@ -117,17 +135,24 @@ vehicle_classification:
     - Leon ST
     CUPRA:
     - Leon Sportstourer
+    Kia:
+    - Ceed SW
+    Renault:
+    - Symbioz
+    - Megane Estate
   exclude_models:
     Ford: []
     Fiat: []
     Jeep:
     - Avenger
+    - Compass
     Peugeot:
     - e-208
     - '208'
     - e-2008
     - '2008'
     - e-Traveller Long
+    - e-Traveller
     Opel:
     - Astra
     - Mokka
@@ -151,6 +176,8 @@ vehicle_classification:
     - Renault Trafic E-Tech
     - Renault Trafic E-Tech T29
     - Captur
+    - Megane E-Tech
+    - Megane
     Citroen:
     - Ami
     - C3
@@ -159,6 +186,7 @@ vehicle_classification:
     - Dolphin
     - Seal
     - ETP3
+    - Atto 2
     Alfa Romeo:
     - Junior
     MG: []
@@ -184,6 +212,7 @@ vehicle_classification:
     - Juke
     - Townstar
     - Ariya Advance
+    - Micra
     Mazda:
     - CX-30
     - MX-30
@@ -208,6 +237,7 @@ vehicle_classification:
     - e-up
     - e-up!
     - ABT
+    - Tiguan
     Audi:
     - A3
     - Q2
@@ -215,8 +245,11 @@ vehicle_classification:
     - 1 Series
     - 2 Series
     - '225'
+    - I3
+    - i3
     Mercedes-Benz:
     - A-Class
+    - A-klasse
     - B-Class
     - EQA
     - GLA
@@ -251,25 +284,26 @@ vehicle_classification:
     Man: []
     smart: []
     'smart #1': []
-    Peugot:
-    - e-208
-    - e-Traveller
     Dongfeng: []
     Kia:
     - E Soul
     - Soul e-Soul
     - e-Soul
     - EV3
+    - Stonic
+    - EV4
     Maxus: []
     Polestar: []
     Leapmotor: []
-    Volkswagfen:
-    - e-up
     Mitsubishi:
     - Colt
+    - Eclipse Cross
+    - Asx
     Suzuki:
     - Swift
     Cupra: []
+    Abarth: []
+    Ds: []
 search_criteria:
   min_price: 15000
   max_price: 35000
@@ -404,17 +438,16 @@ availability_sync:
   strategy: strict
   min_seen_cars: 20
   min_seen_ratio: 0.4
-
-availability_checker:
-  enabled: true
-  check_interval_hours: 0.25
-  check_stale_cars_days: 1
-  scrape_alternatives: true
-  notify_on_preferred_unavailable: true
-  max_cars_per_run: 100
-  driver_restart_interval: 250
-  check_within_budget_only: true
-  remove_unavailable_from_db: true
+  availability_checker:
+    enabled: true
+    check_interval_hours: 0.25
+    check_stale_cars_days: 1
+    scrape_alternatives: true
+    notify_on_preferred_unavailable: true
+    max_cars_per_run: 100
+    driver_restart_interval: 250
+    check_within_budget_only: false
+  remove_unavailable_from_db: false
   recheck_unavailable:
     enabled: true
     check_interval_hours: 168

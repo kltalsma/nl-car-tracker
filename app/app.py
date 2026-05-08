@@ -242,6 +242,75 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ---- Scoring helpers ----
+
+def _price_trend(car: Car):
+    history = sorted(car.price_history, key=lambda ph: ph.recorded_at or datetime.min)
+    if len(history) < 2:
+        return {'trend': 'flat', 'delta': 0}
+    last, prev = history[-1].price, history[-2].price
+    delta = last - prev
+    if delta > 0:
+        return {'trend': 'up', 'delta': delta}
+    if delta < 0:
+        return {'trend': 'down', 'delta': delta}
+    return {'trend': 'flat', 'delta': 0}
+
+
+def _completeness(car: Car, required_count: int = 32):
+    count = car.features_count or 0
+    required = required_count or 1
+    return max(0.0, min(1.0, count / required))
+
+
+def _recency_score(car: Car, half_life_days: int = 7):
+    if not car.last_seen:
+        return 0
+    delta_days = max(0, (datetime.utcnow() - car.last_seen).days)
+    # simple decay: half credit every half_life_days
+    return 1 / (1 + (delta_days / max(1, half_life_days)))
+
+
+def _distance_score(car: Car, clamp_km: int = 100):
+    if car.distance_from_heerenveen_km is None:
+        return 0.7  # neutral-ish when unknown
+    dist = min(max(car.distance_from_heerenveen_km, 0), clamp_km)
+    return 1 - (dist / clamp_km)
+
+
+def compute_car_score(car: Car, weights=None):
+    weights = weights or {
+        'features': 0.55,
+        'recency': 0.15,
+        'distance': 0.15,
+        'trend': 0.05,
+        'completeness': 0.10,
+    }
+    required_features_total = config.get('required_features_count', 32)
+    trend_info = _price_trend(car)
+    trend_weight = 0
+    if trend_info['trend'] == 'up':
+        trend_weight = -0.05
+    elif trend_info['trend'] == 'down':
+        trend_weight = 0.05
+    feature_component = (car.features_count or 0) / max(1, required_features_total)
+    recency_component = _recency_score(car)
+    distance_component = _distance_score(car)
+    completeness_component = _completeness(car)
+    score = (
+        feature_component * weights['features'] +
+        recency_component * weights['recency'] +
+        distance_component * weights['distance'] +
+        trend_weight * weights['trend'] +
+        completeness_component * weights['completeness']
+    ) * 100
+    return {
+        'score': round(score, 2),
+        'trend': trend_info['trend'],
+        'trend_delta': trend_info['delta'],
+        'completeness': completeness_component,
+    }
+
 
 def clean_excluded_vehicles_from_db():
     """
@@ -928,17 +997,23 @@ def check_critical_features(car, config):
     
     # Feature keyword mappings for flexible matching
     feature_keywords = {
-        'adaptive cruise control': ['adaptive cruise control', 'adaptieve cruise control', 'acc', 'adaptive cruise'],
+        'adaptive cruise control': ['adaptive cruise control', 'adaptieve cruise control', 'acc', 'adaptive cruise', 'cruise control adaptief'],
         'android auto': ['android auto', 'apple carplay', 'carplay'],  # CarPlay usually comes with Android Auto
         'navigatiesysteem': ['navigatie', 'navigatiesysteem', 'navigation', 'navi', 'gps'],
         'stuurbekrachtiging': ['stuurbekrachtiging', 'power steering', 'servo', 'besturing'],  # Assume all modern cars have power steering
-        'dab+ radio': ['dab+', 'dab radio', 'digital radio', 'dab', 'digitale radio', 'digitale radio-ontvangst'],
+        'dab+ radio': ['dab+', 'dab radio', 'digital radio', 'dab', 'digitale radio', 'digitale radio-ontvangst', 'dab ontvanger'],
+        'digitale radio-ontvangst': ['dab+', 'dab radio', 'digital radio', 'dab', 'digitale radio', 'dab ontvanger'],
         'elektrisch bedienbare ramen': ['elektrisch bedienbare ramen', 'electric windows', 'elektrische ramen', 'power windows'],
         'achteruitrijcamera': ['achteruitrijcamera', 'rear camera', 'camera', 'reversing camera', 'parkeerhulp met camera'],
+        'parkeerhulp met camera': ['parkeerhulp met camera', 'achteruitrijcamera', 'rear camera', 'reversing camera', 'camera'],
         'climate control': ['climate control', 'climatronic', 'airco', 'climate', 'airconditioning'],
         'hill hold': ['hill hold', 'hill-hold', 'hill start', 'heuvelstart', 'bergstart', 'hill-hold control'],
-        'lane assist': ['lane assist', 'lane keeping', 'lka', 'lane departure', 'lane keeping assist'],
-        'park assist': ['park assist', 'parkeerhulp', 'parking assist', 'parking sensors', 'parkeersensoren', 'parkeerassistent'],
+        'lane assist': ['lane assist', 'lane keeping', 'lka', 'lane departure', 'lane keeping assist', 'lane departure warning'],
+        'lane departure warning systeem': ['lane assist', 'lane keeping', 'lka', 'lane departure', 'lane keeping assist', 'lane departure warning', 'rijstrookassistent'],
+        'park assist': ['park assist', 'parkeerhulp', 'parking assist', 'parking sensors', 'parkeersensoren', 'parkeerassistent', 'parkeersensor'],
+        'parkeerhulp achter': ['parkeerhulp achter', 'parkeersensor achter', 'parkeersensor voor/achter', 'parkeersensor', 'parkeerhulp', 'parking sensors'],
+        'dodehoekdetectie': ['dodehoekdetectie', 'dodehoek detectie', 'dodehoek', 'blind spot', 'blindehoek'],
+        'botswaarschuwing': ['botswaarschuwing', 'autonomous emergency braking', 'aeb', 'forward collision warning', 'emergency braking', 'automatic emergency', 'collision warning'],
         'trekhaak': ['trekhaak', 'tow hitch', 'towbar', 'tow bar', 'towing']
     }
     
@@ -1343,7 +1418,7 @@ def index():
     max_distance_km = config["search"]["location"]["radius_km"]
     query = query.filter(Car.distance_from_heerenveen_km <= max_distance_km)
     
-    # Apply sorting
+    # Apply sorting (default last_seen; score handled after enrichment)
     if sort_by == 'price_asc':
         query = query.order_by(Car.price.asc())
     elif sort_by == 'price_desc':
@@ -1363,7 +1438,18 @@ def index():
         and (car.doors is None or car.doors >= 4)  # Require 4+ doors (or unknown)
         and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
     ]
-    
+
+    # Enrich with score/quality info
+    for car in filtered_cars:
+        score_info = compute_car_score(car)
+        car.score = score_info['score']
+        car.price_trend = score_info['trend']
+        car.price_trend_delta = score_info['trend_delta']
+        car.completeness_ratio = score_info['completeness']
+
+    if sort_by == 'score':
+        filtered_cars = sorted(filtered_cars, key=lambda c: c.score if getattr(c, 'score', None) is not None else 0, reverse=True)
+
     # Filter by required features if specified
     if required_features:
         def car_has_required_features(car):
@@ -1378,6 +1464,16 @@ def index():
         
         filtered_cars = [car for car in filtered_cars if car_has_required_features(car)]
     
+    # Deduplicate: same make/model/year/price/mileage/city = same physical car listed multiple times
+    seen_fingerprints = set()
+    deduped_cars = []
+    for car in filtered_cars:
+        fingerprint = (car.make, car.model, car.year, car.price, car.mileage_km, car.location_city)
+        if fingerprint not in seen_fingerprints:
+            seen_fingerprints.add(fingerprint)
+            deduped_cars.append(car)
+    filtered_cars = deduped_cars
+
     # Paginate filtered results
     total_cars = len(filtered_cars)
     start_idx = (page - 1) * per_page
@@ -1480,6 +1576,12 @@ def car_detail(car_id):
     if not car:
         session.close()
         return "Car not found", 404
+
+    score_info = compute_car_score(car)
+    car.score = score_info['score']
+    car.price_trend = score_info['trend']
+    car.price_trend_delta = score_info['trend_delta']
+    car.completeness_ratio = score_info['completeness']
     
     # Get price history
     price_history = session.query(PriceHistory).filter(
@@ -2339,8 +2441,18 @@ def api_cars():
         if not should_exclude_vehicle(str(car.make or ''), str(car.model or ''))
     ]
     
-    cars_data = [car.to_dict() for car in filtered_cars]
-    
+    cars_data = []
+    for car in filtered_cars:
+        score_info = compute_car_score(car)
+        car_dict = car.to_dict()
+        car_dict.update({
+            'total_score': score_info['score'],
+            'price_trend': score_info['trend'],
+            'price_trend_delta': score_info['trend_delta'],
+            'completeness_ratio': score_info['completeness'],
+        })
+        cars_data.append(car_dict)
+
     session.close()
     
     return jsonify(cars_data)
@@ -2445,6 +2557,7 @@ def api_cars_filter():
         # Convert to JSON-serializable format
         cars_data = []
         for car in filtered_cars:
+            score_info = compute_car_score(car)
             car_dict = {
                 "id": car.id,
                 "make": car.make,
@@ -2458,11 +2571,17 @@ def api_cars_filter():
                 "distance_from_heerenveen_km": car.distance_from_heerenveen_km,
                 "source": car.source_website,
                 "url": car.listing_url,
-                "total_score": getattr(car, "score", 0),
+                "total_score": score_info['score'],
+                "price_trend": score_info['trend'],
+                "price_trend_delta": score_info['trend_delta'],
+                "completeness_ratio": score_info['completeness'],
                 "last_seen": car.last_seen.isoformat() if car.last_seen else None,
                 "features": car.features or []
             }
             cars_data.append(car_dict)
+
+        if sort_by == "score":
+            cars_data = sorted(cars_data, key=lambda c: c.get("total_score", 0), reverse=True)
         
         # Get available models based on current make selection for dynamic dropdown update
         available_models = []
@@ -2647,6 +2766,65 @@ def admin():
         availability_cars_unavailable=availability_cars_unavailable,
         availability_status=availability_status
     )
+
+
+@app.route('/api/scraper-health')
+@login_required
+@admin_required
+def api_scraper_health():
+    """Aggregated scraper health metrics for admin dashboard"""
+    session = db.get_session()
+    try:
+        logs = session.query(ScraperLog).order_by(desc(ScraperLog.started_at)).limit(50).all()
+        by_site = {}
+        for log in logs:
+            site = log.website
+            if site not in by_site:
+                by_site[site] = {'runs': [], 'success': 0, 'error': 0}
+            duration = None
+            if log.completed_at and log.started_at:
+                duration = (log.completed_at - log.started_at).total_seconds()
+            by_site[site]['runs'].append({
+                'started_at': log.started_at.isoformat() if log.started_at else None,
+                'completed_at': log.completed_at.isoformat() if log.completed_at else None,
+                'status': log.status,
+                'duration_seconds': duration,
+                'cars_found': log.cars_found,
+                'cars_new': log.cars_new,
+                'cars_updated': log.cars_updated,
+            })
+            if log.status == 'success':
+                by_site[site]['success'] += 1
+            elif log.status == 'error':
+                by_site[site]['error'] += 1
+        health = []
+        for site, data in by_site.items():
+            durations = [r['duration_seconds'] for r in data['runs'] if r['duration_seconds'] is not None]
+            durations_sorted = sorted(durations)
+            median_dur = None
+            if durations_sorted:
+                mid = len(durations_sorted) // 2
+                if len(durations_sorted) % 2 == 0:
+                    median_dur = (durations_sorted[mid - 1] + durations_sorted[mid]) / 2
+                else:
+                    median_dur = durations_sorted[mid]
+            total = max(1, len(data['runs']))
+            success_rate = data['success'] / total
+            last_run = data['runs'][0] if data['runs'] else {}
+            health.append({
+                'website': site,
+                'success_rate': round(success_rate, 2),
+                'last_status': last_run.get('status'),
+                'last_started_at': last_run.get('started_at'),
+                'median_duration_seconds': median_dur,
+                'recent_runs': data['runs'][:5],
+            })
+        return jsonify({'health': health})
+    except Exception as e:
+        logger.error(f"Error building scraper health: {e}")
+        return jsonify({'error': 'Failed to build scraper health'}), 500
+    finally:
+        session.close()
 
 
 @app.route('/api/trigger-scrape', methods=['POST'])
@@ -2874,6 +3052,21 @@ def mark_car_available(car_id):
         }), 500
 
 
+@app.route('/api/known-makes', methods=['GET'])
+@login_required
+def get_known_makes():
+    try:
+        from models.database import Car
+        session_local = db.get_session()
+        rows = session_local.query(Car.make).distinct().all()
+        session_local.close()
+        makes = sorted({r[0] for r in rows if r[0]})
+        return jsonify({'makes': makes})
+    except Exception as e:
+        logger.error(f"Error getting known makes: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 @app.route('/api/exclusions', methods=['GET'])
 @login_required
 def get_exclusions():
@@ -2913,7 +3106,24 @@ def add_exclusion():
         if not make:
             return jsonify({'status': 'error', 'message': 'Make is required'}), 400
         
-        # Load current config
+        try:
+            from models.database import Car
+            session_local = db.get_session()
+            known_makes = {m[0] for m in session_local.query(Car.make).distinct().all() if m[0]}
+            session_local.close()
+            make_lower_map = {m.lower(): m for m in known_makes}
+            canonical = make_lower_map.get(make.lower())
+            if canonical:
+                make = canonical
+            else:
+                import difflib
+                suggestions = difflib.get_close_matches(make, known_makes, n=3, cutoff=0.6)
+                hint = f' Did you mean: {", ".join(suggestions)}?' if suggestions else ''
+                return jsonify({'status': 'error',
+                                'message': f'Unknown make "{make}".{hint}'}), 400
+        except Exception as norm_err:
+            logger.warning(f"Make normalization skipped: {norm_err}")
+        
         with open(config_path, 'r') as f:
             config_data = yaml.safe_load(f)
         

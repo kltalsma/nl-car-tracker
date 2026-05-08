@@ -79,6 +79,25 @@
         </div>
     </div>
 
+    <!-- Scraper Health -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card admin-card">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-heart-pulse"></i> Scraper Health
+                        <button type="button" class="btn btn-sm btn-outline-primary float-end" onclick="loadScraperHealth()">
+                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                        </button>
+                    </h5>
+                    <div id="scraper-health" class="table-responsive">
+                        <div class="text-center text-muted p-3"><i class="bi bi-hourglass-split"></i> Loading health...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Scheduler Status -->
     <div class="row mb-4">
         <div class="col-12">
@@ -267,7 +286,8 @@
                                     <div class="row">
                                         <div class="col-md-5">
                                             <input type="text" class="form-control" id="exclusion-make" 
-                                                   placeholder="Make (e.g., Toyota)">
+                                                   placeholder="Make (e.g., Toyota)" list="known-makes-list" autocomplete="off">
+                                            <datalist id="known-makes-list"></datalist>
                                         </div>
                                         <div class="col-md-5">
                                             <input type="text" class="form-control" id="exclusion-model" 
@@ -644,7 +664,19 @@
     }
 
     // Exclusion Management Functions
+    function loadKnownMakes() {
+        fetch('/api/known-makes')
+            .then(r => r.json())
+            .then(d => {
+                const dl = document.getElementById('known-makes-list');
+                if (!dl || !d.makes) return;
+                dl.innerHTML = d.makes.map(m => `<option value="${m}">`).join('');
+            })
+            .catch(err => console.error('known-makes load failed', err));
+    }
+
     function loadExclusions() {
+        loadKnownMakes();
         fetch('/api/exclusions')
             .then(response => response.json())
             .then(data => {
@@ -1770,6 +1802,47 @@
         }
     }
 
+    async function loadScraperHealth() {
+        const container = document.getElementById('scraper-health');
+        try {
+            container.innerHTML = '<div class="text-center text-muted p-3"><i class="bi bi-hourglass-split"></i> Loading health...</div>';
+            const response = await fetch('/api/scraper-health');
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to load health');
+            }
+            if (!data.health || data.health.length === 0) {
+                container.innerHTML = '<div class="text-center text-muted p-3">No health data yet.</div>';
+                return;
+            }
+            const rows = data.health.map(item => `
+                <tr>
+                    <td>${item.website}</td>
+                    <td>${(item.success_rate * 100).toFixed(0)}%</td>
+                    <td>${item.last_status || '-'}</td>
+                    <td>${item.last_started_at ? new Date(item.last_started_at).toLocaleString() : '-'}</td>
+                    <td>${item.median_duration_seconds ? item.median_duration_seconds.toFixed(1) + 's' : '-'}</td>
+                </tr>
+            `).join('');
+            container.innerHTML = `
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Website</th>
+                            <th>Success</th>
+                            <th>Last Status</th>
+                            <th>Last Run</th>
+                            <th>Median Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            `;
+        } catch (error) {
+            container.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', function() {
         loadScraperStatistics();
         loadScraperTrends();
@@ -1779,6 +1852,7 @@
         loadUsers(); // Load users on page load
         loadAvailabilityConfig(); // Load availability checker configuration on page load
         loadAvailabilityHistory(); // Load availability check history on page load
+        loadScraperHealth();
     });
 </script>
 {% endblock %}
