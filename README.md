@@ -483,6 +483,30 @@ Potential improvements:
 - Comparison feature
 - Map view with geographic clustering
 
+## Configuration
+
+The app reads configuration from `config.yaml` and environment variables.
+
+### Required Environment Variables
+
+Set these in `.env` or your shell before running:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ADMIN_USERNAME` | `admin` | Dashboard login username |
+| `ADMIN_PASSWORD` | `admin` | Dashboard login password |
+| `SECRET_KEY` | auto-generated | Flask session secret key |
+| `NOTIFICATION_EMAIL` | — | Email address for car match alerts |
+| `CURRENT_LICENSE_PLATE` | — | Your current car license plate (e.g., `XX-XXX-X`) |
+
+### Optional
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GMAIL_USER` | — | Gmail address for sending notifications |
+| `GMAIL_APP_PASSWORD` | — | Gmail app password for notifications |
+| `DISABLE_SCHEDULER` | `false` | Set `true` to disable background scraping |
+
 ## License
 
 This project is for personal use only. Ensure compliance with the terms of service of all scraped websites.
