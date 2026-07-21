@@ -37,7 +37,7 @@ Added new sections:
 
 ```yaml
 current_car:
-  license_plate: SX-515-N
+  license_plate: XX-XXX-X
   mileage_km: 0  # TODO: Update with actual mileage
   make: OPEL
   model: ASTRA SPORTS TOURER+
@@ -57,7 +57,7 @@ Edit `config.yaml` and update the mileage:
 
 ```yaml
 current_car:
-  license_plate: SX-515-N
+  license_plate: XX-XXX-X
   mileage_km: 45000  # <-- Update this with your actual mileage
 ```
 
@@ -70,7 +70,7 @@ Run manually from command line:
 python -m utils.trade_in_checker
 
 # Or specify license plate and mileage directly
-python -m utils.trade_in_checker SX-515-N 45000
+python -m utils.trade_in_checker XX-XXX-X 45000
 ```
 
 ### Step 3: View Results
@@ -84,7 +84,7 @@ The checker will:
 
 ## Your Vehicle Information
 
-Based on RDW lookup for **SX-515-N**:
+Based on RDW lookup for **XX-XXX-X**:
 
 - **Make:** OPEL
 - **Model:** ASTRA SPORTS TOURER+
@@ -100,7 +100,7 @@ The checker uses the RDW Open Data API to fetch official vehicle registration da
 
 ```python
 checker = TradeInChecker()
-rdw_data = checker.get_rdw_data('SX-515-N')
+rdw_data = checker.get_rdw_data('XX-XXX-X')
 ```
 
 This automatically retrieves:

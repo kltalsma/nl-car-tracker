@@ -30,27 +30,18 @@ def create_users_table():
         if existing_users == 0:
             print("\nCreating initial admin users...")
             
-            # Create klaas (admin)
-            klaas = User(
-                username='klaas',
-                password_hash=generate_password_hash('klaas123'),
+            # Create admin users from env vars (fallback to defaults for dev)
+            admin_username = os.environ.get('ADMIN_USERNAME', 'admin')
+            admin_password = os.environ.get('ADMIN_PASSWORD', 'admin')
+            admin = User(
+                username=admin_username,
+                password_hash=generate_password_hash(admin_password),
                 is_admin=True,
                 created_at=datetime.utcnow(),
                 is_active=True
             )
-            session.add(klaas)
-            print("✓ Created admin user: klaas")
-            
-            # Create tineke (regular user, but make admin too since it's family)
-            tineke = User(
-                username='tineke',
-                password_hash=generate_password_hash('tineke123'),
-                is_admin=True,
-                created_at=datetime.utcnow(),
-                is_active=True
-            )
-            session.add(tineke)
-            print("✓ Created admin user: tineke")
+            session.add(admin)
+            print(f"✓ Created admin user: {admin_username}")
             
             session.commit()
             print("\n✓ Initial users created successfully!")

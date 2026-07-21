@@ -14,7 +14,7 @@ This session followed the completion of the depreciation calculator feature. The
 - **Status**: Running ✅
 - **PID**: 73210
 - **Port**: 5001
-- **Process**: `/Users/kltalsma/.pyenv/versions/3.10.6/bin/python app/app.py`
+- **Process**: `python app/app.py`
 
 ### Depreciation API
 - **Endpoint**: `GET /api/calculate-depreciation`
@@ -24,7 +24,7 @@ This session followed the completion of the depreciation calculator feature. The
 - **Car Age**: 7.38 years
 
 ### Database
-- **Current Car**: SX-515-N (OPEL ASTRA SPORTS TOURER+ 2018)
+- **Current Car**: XX-XXX-X (OPEL ASTRA SPORTS TOURER+ 2018)
 - **Current Mileage**: 151,000 km
 - **Purchase Date**: 2018-06-18
 - **Purchase Price**: €16,750
@@ -184,13 +184,13 @@ tail -f ./tmp/flask.log | grep -E "GET|POST|PUT|DELETE"
 Process: python app/app.py
 PID: 73210
 Port: 5001
-Working Directory: /Users/kltalsma/Prive/nl-car-tracker
+Working Directory: /path/to/nl-car-tracker
 Log File: ./tmp/flask.log
 ```
 
 ### Restart Command
 ```bash
-pkill -f "python.*app/app.py" && cd /Users/kltalsma/Prive/nl-car-tracker && nohup python app/app.py > ./tmp/flask.log 2>&1 &
+pkill -f "python.*app/app.py" && cd /path/to/nl-car-tracker && nohup python app/app.py > ./tmp/flask.log 2>&1 &
 ```
 
 ### Test Endpoints
@@ -222,7 +222,7 @@ mv ./tmp/*.log ./tmp/archive/ && gzip ./tmp/archive/*.log
 
 Or use `logrotate` configuration:
 ```
-/Users/kltalsma/Prive/nl-car-tracker/tmp/*.log {
+/path/to/nl-car-tracker/tmp/archive/*.log {
     daily
     rotate 7
     compress
@@ -259,7 +259,7 @@ Or use `logrotate` configuration:
 This session:
 1. ✅ Verified Flask application running (PID 73210)
 2. ✅ Tested depreciation API endpoint (working)
-3. ✅ Confirmed database state (SX-515-N populated)
+3. ✅ Confirmed database state (XX-XXX-X populated)
 4. ✅ Identified all available log files
 5. ✅ Provided monitoring commands and best practices
 6. ✅ Created this reference documentation

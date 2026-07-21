@@ -26,6 +26,6 @@ def init_auth(app):
 def check_credentials(username, password):
     """Check if credentials are valid using environment variables"""
     valid_username = os.environ.get('APP_USERNAME', 'admin')
-    valid_password = os.environ.get('APP_PASSWORD', 'changeme')
+    valid_password = os.environ.get('APP_PASSWORD', 'admin')
     
     return username == valid_username and password == valid_password

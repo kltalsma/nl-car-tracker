@@ -153,6 +153,8 @@ vehicle_classification:
     - '2008'
     - e-Traveller Long
     - e-Traveller
+    - '308'
+    - '3008'
     Opel:
     - Astra
     - Mokka
@@ -164,6 +166,7 @@ vehicle_classification:
     - Grandland
     - Corsa
     - Rocks
+    - Frontera
     Renault:
     - Kangoo
     - Kangoo Advance
@@ -178,10 +181,17 @@ vehicle_classification:
     - Captur
     - Megane E-Tech
     - Megane
+    - Arkana
+    - '5'
+    - '4'
+    - Austral E Tech Full
     Citroen:
     - Ami
     - C3
     - C3 Aircross
+    - E C4
+    - C5 Aircross
+    - C5 X 1.6
     BYD:
     - Dolphin
     - Seal
@@ -238,6 +248,8 @@ vehicle_classification:
     - e-up!
     - ABT
     - Tiguan
+    - Up!
+    - E Transporter
     Audi:
     - A3
     - Q2
@@ -261,6 +273,7 @@ vehicle_classification:
     - Fabia
     - Scala
     - Elroq
+    - Octavia
     SEAT:
     - Ibiza
     - Arona
@@ -292,6 +305,8 @@ vehicle_classification:
     - EV3
     - Stonic
     - EV4
+    - EV2
+    - Niro 1.6 Gdi
     Maxus: []
     Polestar: []
     Leapmotor: []
@@ -299,14 +314,27 @@ vehicle_classification:
     - Colt
     - Eclipse Cross
     - Asx
+    - Outlander
     Suzuki:
     - Swift
     Cupra: []
     Abarth: []
     Ds: []
+    Jaecoo: []
+    Subaru:
+    - Solterra
+    Byd:
+    - Atto 3
+    - Atto
+    - Dolphin
+    - Seal Business
+    Jaguar:
+    - I-Pace
+    - I Pace
+    Geely: []
 search_criteria:
   min_price: 15000
-  max_price: 35000
+  max_price: 40000
   min_year: 2020
   acceptable_year: 2020
   max_mileage_km: 60000
@@ -325,24 +353,52 @@ preferred_cars:
   - Kodiaq
   - Superb
   - e-tron
+  - A6
+  - A6 Avant
   - Q4 e-tron
   - EV5
   - EV6
   - EV9
   - iX3
+  - Scenic E Tech Ev87
   - Tucson
+  dream_models:
+  - A6
+  - A6 Avant
+  - S6 Avant
+  - S8
+  - C 300 C
+  - C 300
+  - C-Class
+  - E-Class
+  - E 63 AMG
+  - C 63 AMG
+  - CLA 250
+  - Cla 250
+  - EQC
+  - GLC
+  - 7 Series
+  - '740'
+  - Taycan
+  - Model S
+  - Model 3 Performance
+  - M3
+  - M4
+  - M440E
+  - 750E
+  - XJ
   auto_prefer_wagons_min_range: 100
 search:
   vehicle_types:
   - type: SUV
-    max_price: 35000
+    max_price: 40000
   - type: Stationwagon
-    max_price: 35000
+    max_price: 40000
   fuel_types:
   - type: Full Electric
-    min_range_km: 300
+    min_range_km: 475
   - type: PHEV
-    min_electric_range_km: 30
+    min_electric_range_km: 100
   max_mileage_km: 60000
   min_year: 2020
   min_storage_capacity_liters: 400
@@ -362,12 +418,15 @@ critical_features:
 - Adaptive Cruise Control
 - Park Assist
 - Achteruitrijcamera
-- "360\xB0 camera"
 - Dodehoekdetectie
 - Botswaarschuwing
 - Parkeerhulp automatisch
-- Verkeersbordherkenning
 - DAB+ radio
+- Lane Assist
+- Elektrische achterklep
+- Stoelverwarming
+- Trekhaak
+- "360\xB0 camera"
 nice_to_have_features:
 - Trekhaak
 - Hill-Hold Control
@@ -376,21 +435,31 @@ nice_to_have_features:
 - Stoelverwarming
 - Lederen bekleding
 - Stuurverwarming
+- Stuurwielverwarming
+- "360\xB0 camera"
+- Inductieladen voor smartphones
 - Keyless Entry
 scraping:
   websites:
   - name: autoscout24.nl
     enabled: true
     base_url: https://www.autoscout24.nl
+    price_buffer_eur: 5000
   - name: autotrack.nl
     enabled: true
     base_url: https://www.autotrack.nl
   - name: gaspedaal.nl
     enabled: true
     base_url: https://www.gaspedaal.nl
+    price_buffer_eur: 5000
+  - name: abd.nl
+    enabled: true
+    base_url: https://www.abd.nl
+    price_buffer_eur: 5000
   - name: vandenbrug.nl
     enabled: true
     base_url: https://vandenbrug.nl
+    price_buffer_eur: 5000
   rate_limit:
     min_delay_seconds: 1800
     max_delay_seconds: 3600
@@ -429,7 +498,7 @@ notifications:
     smtp_port: 587
     from_email: ${GMAIL_USER}
     from_password: ${GMAIL_APP_PASSWORD}
-    to_email: kltalsma@gmail.com
+    to_email: ${NOTIFICATION_EMAIL}
     notify_on_top_match: true
     notify_on_unavailable_preferred: true
     min_score_for_notification: 85
@@ -440,13 +509,14 @@ availability_sync:
   min_seen_ratio: 0.4
   availability_checker:
     enabled: true
-    check_interval_hours: 0.25
+    check_interval_hours: 0.16666666666666666
     check_stale_cars_days: 1
     scrape_alternatives: true
     notify_on_preferred_unavailable: true
     max_cars_per_run: 100
     driver_restart_interval: 250
     check_within_budget_only: false
+    min_features_required: 3
   remove_unavailable_from_db: false
   recheck_unavailable:
     enabled: true
@@ -455,7 +525,7 @@ availability_sync:
     only_recheck_verified: true
   min_features_required: 3
 current_car:
-  license_plate: SX-515-N
+  license_plate: ${CURRENT_LICENSE_PLATE}
   mileage_km: 151000
   make: OPEL
   model: ASTRA SPORTS TOURER+

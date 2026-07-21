@@ -480,7 +480,7 @@ Before making ANY changes to validation logic:
 
 ```bash
 # 1. Backup database
-cd /Users/kltalsma/Prive/nl-car-tracker
+cd /path/to/nl-car-tracker
 mkdir -p data/backups
 cp data/cars.db data/backups/cars_backup_$(date +%Y%m%d_%H%M%S).db
 
@@ -529,8 +529,8 @@ ORDER BY year DESC;
 **Database:** 181 available cars  
 
 **Key Files:**
-- `/Users/kltalsma/Prive/nl-car-tracker/scrapers/base_scraper.py`
-- `/Users/kltalsma/Prive/nl-car-tracker/config.yaml`
-- `/Users/kltalsma/Prive/nl-car-tracker/models/database.py`
+- `scrapers/base_scraper.py`
+- `config.yaml`
+- `models/database.py`
 
 **Next Session:** Pick up from "Decision Matrix" section above

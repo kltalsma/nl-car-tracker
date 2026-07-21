@@ -404,7 +404,7 @@ The trade-in tracker uses a CLI interface for managing valuations:
 
 ```bash
 # Run from project root with PYTHONPATH set
-export PYTHONPATH=/Users/kltalsma/Prive/nl-car-tracker
+export PYTHONPATH=/path/to/nl-car-tracker
 
 # Add a valuation
 python utils/trade_in_checker.py add \
@@ -440,7 +440,7 @@ Your current car details are stored in `config.yaml`:
 
 ```yaml
 current_car:
-  license_plate: "SX-515-N"
+  license_plate: "XX-XXX-X"
   mileage_km: 151000
 ```
 

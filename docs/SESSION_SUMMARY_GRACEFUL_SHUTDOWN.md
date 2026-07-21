@@ -12,7 +12,7 @@
 
 ### 1. ✅ Updated `stop-local.sh` (Local/Native Mode)
 
-**File**: `/Users/kltalsma/Prive/nl-car-tracker/stop-local.sh`
+**File**: `/path/to/nl-car-tracker/stop-local.sh`
 
 **Changes**:
 - Increased graceful shutdown timeout from **5 seconds to 30 seconds**
@@ -47,7 +47,7 @@ done
 
 ### 2. ✅ Updated `stop.sh` (Docker Mode)
 
-**File**: `/Users/kltalsma/Prive/nl-car-tracker/stop.sh`
+**File**: `/path/to/nl-car-tracker/stop.sh`
 
 **Changes**:
 - Added `-t 30` flag to `docker compose stop` command
@@ -69,7 +69,7 @@ docker compose down -t 30
 
 ### 3. ✅ Updated `docker-compose.yml`
 
-**File**: `/Users/kltalsma/Prive/nl-car-tracker/docker-compose.yml`
+**File**: `/path/to/nl-car-tracker/docker-compose.yml`
 
 **Changes**:
 - Added `stop_grace_period: 30s` to `web` service

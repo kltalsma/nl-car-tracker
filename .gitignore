@@ -26,6 +26,7 @@ wheels/
 # Data
 data/
 logs/
+flask.log
 *.db
 *.sqlite
 *.sqlite3
@@ -62,9 +63,13 @@ backups/
 # Backup files
 *.bak
 *~
-# Backup files
 *.backup
 *.backup-*
+.pre-fix-*
+.pre-ui-*
+
+# Cookies
+cookies/
 
 # Temporary directory
 tmp/

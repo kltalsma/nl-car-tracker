@@ -16,7 +16,7 @@ This script verifies and enriches the `data/wltp_ranges.yaml` file using officia
 
 ### Basic Verification (Read-only)
 ```bash
-cd /Users/kltalsma/Prive/nl-car-tracker
+cd /path/to/nl-car-tracker
 python scripts/enrich_wltp_from_rdw.py
 ```
 

@@ -55,7 +55,7 @@ class TradeInChecker:
         Fetch car details from RDW (Dutch vehicle registration) API
         
         Args:
-            license_plate: Dutch license plate (e.g., 'SX-515-N')
+            license_plate: Dutch license plate (e.g., 'XX-XXX-X')
             
         Returns:
             Dictionary with car details or None if not found

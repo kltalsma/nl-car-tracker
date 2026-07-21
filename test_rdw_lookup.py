@@ -3,7 +3,8 @@
 Test script to verify RDW API lookup for license plate
 """
 import sys
-sys.path.insert(0, '/Users/kltalsma/Prive/nl-car-tracker')
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from utils.trade_in_checker import TradeInChecker
 
@@ -14,8 +15,7 @@ def main():
     
     checker = TradeInChecker()
     
-    # Test with your license plate
-    license_plate = "SX-515-N"
+    license_plate = os.environ.get('TEST_LICENSE_PLATE', 'XX-XXX-X')
     
     print(f"\nLooking up license plate: {license_plate}")
     print("-" * 60)

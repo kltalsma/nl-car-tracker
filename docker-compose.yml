@@ -3,23 +3,40 @@ services:
   web:
     build: .
     container_name: nl-car-tracker-web
-    ports:
-      - "30200:5002"
+    expose:
+      - "5002"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./config.yaml:/app/config.yaml
       - ./app:/app/app
+      - ./models:/app/models
+      - ./scrapers:/app/scrapers
+      - ./utils:/app/utils
       - ./check_availability.py:/app/check_availability.py
       - /var/run/docker.sock:/var/run/docker.sock  # Allow Docker control from container
       - .:/app/project_root  # Mount project root for docker-compose access
     environment:
       - FLASK_ENV=production
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set}
       - DISABLE_SCHEDULER=true  # Web container only serves dashboard, scraper container handles scraping
     command: python app/app.py
     restart: unless-stopped
     stop_grace_period: 30s
+    networks:
+      - car-tracker-network
+
+  # Reverse proxy (fronts the web dashboard)
+  nginx:
+    image: nginx:alpine
+    container_name: nl-car-tracker-nginx
+    restart: unless-stopped
+    ports:
+      - "30200:30200"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - web
     networks:
       - car-tracker-network
 
@@ -32,7 +49,11 @@ services:
       - ./logs:/app/logs
       - ./config.yaml:/app/config.yaml
       - ./app:/app/app
+      - ./models:/app/models
+      - ./scrapers:/app/scrapers
+      - ./utils:/app/utils
       - ./check_availability.py:/app/check_availability.py
+      - ./run_scraper.py:/app/run_scraper.py
     environment:
       - PYTHONUNBUFFERED=1
     command: python run_scraper.py

@@ -15,7 +15,7 @@ from functools import wraps
 from models.database import Database, Car, PriceHistory, ScraperLog, User, UserFeedback
 from sqlalchemy import desc, func, or_, case
 from datetime import datetime, timedelta
-from utils.helpers import match_required_features, should_exclude_vehicle, get_boot_space, get_ev_database_range, get_wltp_range, extract_battery_size, calculate_towing_range, find_duplicate_cars
+from utils.helpers import match_required_features, should_exclude_vehicle, get_boot_space, get_ev_database_range, get_wltp_range, extract_battery_size, calculate_towing_range, find_duplicate_cars, reload_vehicle_classification
 from apscheduler.schedulers.background import BackgroundScheduler
 import yaml
 import os
@@ -28,7 +28,7 @@ import signal
 
 # Initialize Flask app
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or os.urandom(24).hex()
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
@@ -244,6 +244,12 @@ logger = logging.getLogger(__name__)
 
 # ---- Scoring helpers ----
 
+TARGET_FUEL_TYPES = ('Full Electric', 'PHEV')
+
+
+def _non_private_seller_filter():
+    return or_(Car.dealer_name.is_(None), Car.dealer_name != "Basisgegevens")
+
 def _price_trend(car: Car):
     history = sorted(car.price_history, key=lambda ph: ph.recorded_at or datetime.min)
     if len(history) < 2:
@@ -372,11 +378,13 @@ def run_scrapers():
         from scrapers.autoscout24_scraper import AutoScout24Scraper
         from scrapers.autotrack_scraper import AutotrackScraper
         from scrapers.gaspedaal_scraper import GaspedaalScraper
+        from scrapers.abd_scraper import ABDScraper
         
         scrapers = [
             AutoScout24Scraper(),
             AutotrackScraper(),
-            GaspedaalScraper()
+            GaspedaalScraper(),
+            ABDScraper()
         ]
         
         for scraper in scrapers:
@@ -403,7 +411,7 @@ def check_car_availability():
     from datetime import datetime
     
     # Get availability checker config
-    av_config = config.get('availability_checker', {})
+    av_config = get_availability_config()
     if not av_config.get('enabled', True):
         logger.info("Availability checker is disabled in config")
         return {'cars_checked': 0, 'cars_marked_unavailable': 0}
@@ -499,7 +507,7 @@ def recheck_unavailable_cars():
     from datetime import datetime
     
     # Get availability checker config
-    av_config = config.get('availability_checker', {})
+    av_config = get_availability_config()
     recheck_config = av_config.get('recheck_unavailable', {})
     
     if not recheck_config.get('enabled', False):
@@ -580,6 +588,15 @@ def recheck_unavailable_cars():
         return {'cars_checked': 0, 'cars_remarked_available': 0, 'error': str(e)}
 
 
+def get_availability_config():
+    """Read availability settings from the nested config first, with legacy fallback."""
+    nested = config.get('availability_sync', {}).get('availability_checker', {})
+    legacy = config.get('availability_checker', {})
+    merged = dict(nested)
+    merged.update(legacy)
+    return merged
+
+
 # Initialize background scheduler
 scheduler = BackgroundScheduler()
 
@@ -600,7 +617,7 @@ if scheduler_enabled:
     )
     
     # Add availability check job - runs every 6 hours
-    av_config = config.get('availability_checker', {})
+    av_config = get_availability_config()
     av_check_hours = av_config.get('check_interval_hours', 6)
     
     scheduler.add_job(
@@ -665,7 +682,7 @@ else:
     logger.info("Background scheduler is disabled in config.yaml")
 
 
-def calculate_car_score(car, config, distance_weight=0.1):
+def calculate_car_score(car, config, distance_weight=0.15):
     """
     Calculate a score for a car based on critical features, price, odometer, range, age, and distance.
     Lower score = better match
@@ -680,13 +697,13 @@ def calculate_car_score(car, config, distance_weight=0.1):
     
     CONTENDER BONUSES:
     - Full Electric SUV with 500+ km range: -10 points (major bonus!)
-    - PHEV/Hybrid with 100+ km electric range: -5 points (good bonus!)
+    - PHEV with 100+ km electric range: -5 points (good bonus!)
     - Has trekhaak: -5 points (nice bonus, can install aftermarket)
     
     Args:
         car: Car object to score
         config: Configuration dictionary
-        distance_weight: Weight for distance scoring (default 0.1 = 10%, can be increased for stronger local preference)
+        distance_weight: Weight for distance scoring (default 0.15 = 15%, can be increased for stronger local preference)
     """
     score = 0
     
@@ -743,9 +760,9 @@ def calculate_car_score(car, config, distance_weight=0.1):
     else:
         score += 100 * 0.15  # Penalty for missing odometer
     
-    # Age score (normalize to 0-100 scale, reference year = 2025, max age = 10 years)
+    # Age score (normalize to 0-100 scale, based on current year, max age = 10 years)
     if car.year:
-        current_year = 2025
+        current_year = datetime.utcnow().year
         age = current_year - car.year
         max_age = 10
         age_score = min((age / max_age) * 100, 100)
@@ -888,34 +905,61 @@ def calculate_car_score(car, config, distance_weight=0.1):
         score += 30 * 0.05  # Small penalty for missing range (assume decent 400km)
     
     # ===== CONTENDER BONUSES =====
-    # These bonuses can significantly boost a car's ranking
+    # These bonuses can significantly boost a car's ranking.
     vehicle_type_str = str(car.vehicle_type).upper() if car.vehicle_type else ''
+    model_lower = str(car.model).lower() if car.model else ''
     is_suv = 'SUV' in vehicle_type_str
     is_stationwagon = 'STATIONWAGON' in vehicle_type_str or 'STATION' in vehicle_type_str
     is_full_electric = car.fuel_type == 'Full Electric'
-    is_phev_or_hybrid = car.fuel_type in ['PHEV', 'Hybrid']
-    
-    # BONUS 1: Full Electric SUV with 400+ km REAL-WORLD range is a STRONG contender (for towing)
-    # Real-world range ≈ 75% of WLTP (winter/highway conditions)
-    real_world_range = range_km * 0.75 if range_km else 0
-    if is_full_electric and is_suv and real_world_range >= 400:
-        score -= 10  # Major bonus! (lower score = better)
-    
-    
-    
-    # BONUS 2.5: Storage capacity 500L+ requirement (practical requirement)
+
+    fuel_preferences = {
+        item.get('type'): item
+        for item in config.get('search', {}).get('fuel_types', [])
+        if isinstance(item, dict) and item.get('type')
+    }
+    ev_preferred_range = fuel_preferences.get('Full Electric', {}).get('min_range_km', 475)
+    phev_preferred_range = fuel_preferences.get('PHEV', {}).get('min_electric_range_km', 100)
+
+    if is_full_electric and range_km:
+        if range_km >= ev_preferred_range:
+            score -= 12
+        elif range_km >= ev_preferred_range - 25:
+            score -= 7
+        elif range_km < 425:
+            score += 8
+
+    if car.fuel_type == 'PHEV' and range_km:
+        if range_km >= phev_preferred_range:
+            score -= 8
+        elif range_km >= 60:
+            score -= 3
+        else:
+            score += 4
+
     if hasattr(car, 'storage_capacity_liters') and car.storage_capacity_liters and car.storage_capacity_liters >= 500:
-        score -= 3  # Bonus for meeting storage requirement
-    
-    # PENALTY: Storage below 500L is a significant drawback
-    if hasattr(car, 'storage_capacity_liters') and car.storage_capacity_liters and car.storage_capacity_liters < 500:
-        score += 8  # Penalty for insufficient storage
-    
-    # BONUS 3: SUV or Station Wagon body style (family-friendly)
+        score -= 4
+
+    if hasattr(car, 'storage_capacity_liters') and car.storage_capacity_liters and car.storage_capacity_liters < 450:
+        score += 8
+
     if is_suv or is_stationwagon:
-        score -= 5  # Prefer larger family-friendly vehicles
-# BONUS 4: PHEV preference - best of both worlds for family use    if car.fuel_type == "PHEV":        score -= 8  # Strong preference for plug-in hybrids        # BONUS 5: Higher seating position preference (SUV priority over station wagon)    if is_suv:        score -= 3  # Additional bonus for higher seating position        # BONUS 6: Family-sized PHEV SUV = ideal combination    if car.fuel_type == "PHEV" and is_suv and hasattr(car, "storage_capacity_liters") and car.storage_capacity_liters and car.storage_capacity_liters >= 500:        score -= 5  # Extra bonus for perfect family vehicle combination
-    
+        score -= 5
+
+    if is_suv:
+        score -= 2
+
+    if 'a6' in model_lower and is_stationwagon and car.fuel_type in TARGET_FUEL_TYPES:
+        score -= 18
+
+    if 'superb' in model_lower and is_stationwagon and car.fuel_type == 'PHEV':
+        score -= 16
+
+    if 'tucson' in model_lower and car.fuel_type == 'PHEV':
+        score -= 8
+
+    if 'octavia' in model_lower and is_stationwagon and car.fuel_type == 'PHEV':
+        score += 12
+
     # BONUS 4: Preferred cars (based on config - Skoda Enyaq, Audi Q4, etc.)
     preferred_config = config.get('preferred_cars', {})
     if preferred_config:
@@ -1381,7 +1425,10 @@ def index():
     sort_by = request.args.get('sort_by', 'last_seen')
     
     # Build query
-    query = session.query(Car).filter(Car.is_available == True)
+    query = session.query(Car).filter(
+        Car.is_available == True,
+        Car.fuel_type.in_(TARGET_FUEL_TYPES)
+    )
     
     # Apply filters
     if vehicle_type:
@@ -1501,7 +1548,7 @@ def index():
     # Get user requirements
     user_reqs = {
         "min_price": config.get("search_criteria", {}).get("min_price", 15000),
-        "max_price": config.get("search_criteria", {}).get("max_price", 35000),
+        "max_price": config.get("search_criteria", {}).get("max_price", 40000),
         "acceptable_year": config.get("search_criteria", {}).get("acceptable_year", 2020),
         "max_mileage_acceptable": config.get("search_criteria", {}).get("max_mileage_acceptable", 100000)
     }
@@ -1514,15 +1561,15 @@ def index():
         Car.price <= user_reqs["max_price"],
         Car.year >= user_reqs["acceptable_year"],
         Car.mileage_km < user_reqs["max_mileage_acceptable"],
-        Car.fuel_type.in_(["Full Electric", "PHEV", "Hybrid"]),  # Only EV/PHEV/Hybrid
+        Car.fuel_type.in_(TARGET_FUEL_TYPES),
         Car.distance_from_heerenveen_km <= 80,  # Max 80km
-        Car.dealer_name != "Basisgegevens",  # Exclude private sellers
+        _non_private_seller_filter(),  # Exclude private sellers
     )
 
     stats = {
         "total_ever": session.query(Car).count(),  # All cars in database
         "total_available": base_query.count(),  # Cars matching base filters
-        "within_budget": base_query.filter(Car.price <= 35000).count(),  # Within budget
+        "within_budget": base_query.filter(Car.price <= user_reqs["max_price"]).count(),  # Within budget
         "perfect_matches": base_query.filter(
             Car.has_all_required_features == True
         ).count(),  # All required features
@@ -1530,13 +1577,17 @@ def index():
     }
 
     # Get unique makes and models for filter dropdowns
-    available_makes = session.query(Car.make).filter(Car.is_available == True).distinct().order_by(Car.make).all()
+    available_makes = session.query(Car.make).filter(
+        Car.is_available == True,
+        Car.fuel_type.in_(TARGET_FUEL_TYPES)
+    ).distinct().order_by(Car.make).all()
     available_makes = [m[0] for m in available_makes if m[0]]
     
     available_models = []
     if make:
         available_models = session.query(Car.model).filter(
             Car.is_available == True,
+            Car.fuel_type.in_(TARGET_FUEL_TYPES),
             Car.make == make
         ).distinct().order_by(Car.model).all()
         available_models = [m[0] for m in available_models if m[0]]
@@ -1547,7 +1598,7 @@ def index():
     class UserReqs:
         def __init__(self):
             self.min_price = config.get('search_criteria', {}).get('min_price', 15000)
-            self.max_price = config.get('search_criteria', {}).get('max_price', 35000)
+            self.max_price = config.get('search_criteria', {}).get('max_price', 40000)
             self.min_year = config.get('search_criteria', {}).get('min_year', 2020)
             self.max_mileage_acceptable = config.get('search', {}).get('max_mileage_km', 150000)
     
@@ -1663,7 +1714,7 @@ def my_matches():
     # Use the most restrictive criteria (from Gaspedaal URL requirements)
     user_reqs = {
         'min_price': config.get('search_criteria', {}).get('min_price', 20000),
-        'max_price': config.get('search_criteria', {}).get('max_price', 35000),
+        'max_price': config.get('search_criteria', {}).get('max_price', 40000),
         'min_year': config.get('search_criteria', {}).get('min_year', 2022),
         'acceptable_year': 2020,  # Still allow 2020 as acceptable
         'max_mileage_priority': config.get('search_criteria', {}).get('max_mileage_km', 60000),
@@ -1679,9 +1730,9 @@ def my_matches():
         Car.price <= user_reqs['max_price'],
         Car.year >= user_reqs['acceptable_year'],
         Car.mileage_km < user_reqs['max_mileage_acceptable'],
-        Car.fuel_type.in_(['Full Electric', 'PHEV', 'Hybrid']),  # Only EV/PHEV/Hybrid
+        Car.fuel_type.in_(TARGET_FUEL_TYPES),
         Car.distance_from_heerenveen_km <= 80,  # Max 80km
-        Car.dealer_name != "Basisgegevens",
+        _non_private_seller_filter(),
     )
     
     # Apply additional filters from request
@@ -1833,15 +1884,21 @@ def my_matches():
         elif features_met >= 4:  # 4-5/8
             good_matches.append(item)
         # Cars with fewer than 4 features are not shown
+
+    fallback_matches = analyzed_cars[:6] if not perfect_matches and not great_matches and not good_matches else []
     
     # Get unique makes and models for filter dropdowns
-    available_makes = session.query(Car.make).filter(Car.is_available == True).distinct().order_by(Car.make).all()
+    available_makes = session.query(Car.make).filter(
+        Car.is_available == True,
+        Car.fuel_type.in_(TARGET_FUEL_TYPES)
+    ).distinct().order_by(Car.make).all()
     available_makes = [m[0] for m in available_makes if m[0]]
     
     available_models = []
     if make:
         available_models = session.query(Car.model).filter(
             Car.is_available == True,
+            Car.fuel_type.in_(TARGET_FUEL_TYPES),
             Car.make == make
         ).distinct().order_by(Car.model).all()
         available_models = [m[0] for m in available_models if m[0]]
@@ -1858,6 +1915,7 @@ def my_matches():
                          perfect_matches=perfect_matches,
                          great_matches=great_matches,
                          good_matches=good_matches,
+                         fallback_matches=fallback_matches,
                          user_reqs=user_reqs,
                          trade_in_value=TRADE_IN_VALUE,
                          config=config,
@@ -1880,9 +1938,9 @@ def get_heerenveen_matches(session, fuel_type, config, limit=3):
     # Build base query
     query = session.query(Car).filter(
         Car.is_available == True,
-        Car.fuel_type == fuel_type if fuel_type != 'PHEV/Hybrid' else Car.fuel_type.in_(['PHEV', 'Hybrid']),
+        Car.fuel_type == fuel_type,
         Car.year >= 2020,
-        Car.price <= 35000,
+        Car.price <= config.get('search_criteria', {}).get('max_price', 40000),
         Car.mileage_km <= 150000,
         Car.distance_from_heerenveen_km <= 30
     )
@@ -1941,7 +1999,7 @@ def get_heerenveen_matches(session, fuel_type, config, limit=3):
 @app.route('/top-matches')
 @login_required
 def top_matches():
-    """Show top 3 Full Electric and top 3 PHEV/Hybrid cars based on smart scoring (price, odometer, range, age)"""
+    """Show top 3 Full Electric and top 3 PHEV cars based on smart scoring."""
     session = db.get_session()
     
     # Get filter parameters from request
@@ -1997,12 +2055,14 @@ def top_matches():
         if not should_exclude_vehicle(str(car.make or ''), str(car.model or ''))
         and (car.doors is None or car.doors >= 4)  # Require 4+ doors (or unknown)
         and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
-        and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 500)  # Min 500L boot when known
+        and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 450)  # Min 450L boot when known
     ]
     
-    # Define preferred makes and models (same as my-matches page)
-    preferred_makes = ['Skoda', 'Audi', 'Kia']
-    preferred_models = ['Enyaq', 'Kodiaq', 'e-tron', 'EV5', 'EV9', 'Leon Sportstourer', 'Leon ST', 'Cupra Leon']
+    # Define preferred and dream models from config
+    preferred_config = config.get('preferred_cars', {})
+    preferred_makes = preferred_config.get('makes', [])
+    preferred_models = preferred_config.get('models', [])
+    dream_models = [m.lower() for m in preferred_config.get('dream_models', [])]
     
     # Score and sort Full Electric cars
     full_electric_scored = []
@@ -2047,16 +2107,26 @@ def top_matches():
         car = item["car"]
         logger.info(f"#{i+1}: {car.make} {car.model} ({car.year}) - Score: {item['score']:.2f} - Distance: {car.distance_from_heerenveen_km}km - Price: €{car.price:,} - Mileage: {car.mileage_km:,}km")
     logger.info("=" * 80)
-    full_electric = [item['car'] for item in full_electric_scored[:3]]
+    
+    # Filter out dream cars from EV top picks
+    full_electric_non_dream = []
+    for item in full_electric_scored:
+        car = item['car']
+        car_model_lower = str(car.model).lower() if car.model else ''
+        is_dream = any(term in car_model_lower for term in dream_models)
+        if not is_dream:
+            full_electric_non_dream.append(item)
+    
+    full_electric = [item['car'] for item in full_electric_non_dream[:6]]
     # Add score and value_rating to car objects for display
-    for item in full_electric_scored[:3]:
+    for item in full_electric_non_dream[:6]:
         item['car'].score = item['score']
         item['car'].value_rating = item['value_rating']
     
-    # Build base query for PHEV/Hybrid cars
+    # Build base query for PHEV cars
     phev_query = session.query(Car).filter(
         Car.is_available == True,
-        Car.fuel_type.in_(['PHEV', 'Hybrid']),
+        Car.fuel_type == 'PHEV',
         Car.distance_from_heerenveen_km <= 80  # Max 80km
     )
     
@@ -2092,7 +2162,7 @@ def top_matches():
         if not should_exclude_vehicle(str(car.make or ''), str(car.model or ''))
         and (car.doors is None or car.doors >= 4)  # Require 4+ doors (or unknown)
         and (car.seats is None or car.seats >= 5)  # Require 5+ seats (or unknown)
-        and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 500)  # Min 500L boot when known
+        and (car.storage_capacity_liters is None or car.storage_capacity_liters >= 450)  # Min 450L boot when known
     ]
     
     # Score and sort PHEV cars
@@ -2123,44 +2193,105 @@ def top_matches():
     
     # Sort by score (lower is better)
     phev_scored.sort(key=lambda x: x['score'])
-    phev = [item['car'] for item in phev_scored[:3]]
+    
+    # Filter out dream cars from PHEV top picks
+    phev_non_dream = []
+    for item in phev_scored:
+        car = item['car']
+        car_model_lower = str(car.model).lower() if car.model else ''
+        is_dream = any(term in car_model_lower for term in dream_models)
+        if not is_dream:
+            phev_non_dream.append(item)
+    
+    phev = [item['car'] for item in phev_non_dream[:6]]
     # Add score and value_rating to car objects for display
-    for item in phev_scored[:3]:
+    for item in phev_non_dream[:6]:
         item['car'].score = item['score']
         item['car'].value_rating = item['value_rating']
+
+    dream_by_brand = {}
+    
+    # Exclude cars already in top EV/PHEV results from dream section
+    excluded_ids = set([car.id for car in full_electric] + [car.id for car in phev])
+    
+    if dream_models:
+        # Query ALL available EV + PHEV cars (no distance restriction) for dream models
+        dream_ev_query = session.query(Car).filter(
+            Car.is_available == True,
+            Car.fuel_type == 'Full Electric'
+        )
+        dream_ev_all = dream_ev_query.all()
+        
+        dream_phev_query = session.query(Car).filter(
+            Car.is_available == True,
+            Car.fuel_type == 'PHEV'
+        )
+        dream_phev_all = dream_phev_query.all()
+        
+        # Filter out excluded vehicles
+        dream_filtered = [
+            car for car in dream_ev_all + dream_phev_all
+            if not should_exclude_vehicle(str(car.make or ''), str(car.model or ''))
+        ]
+        
+        # Score dream cars (use distance_weight=0.05 to deprioritize distance for dreams)
+        for car in dream_filtered:
+            car_model_lower = str(car.model).lower() if car.model else ''
+            if car.id in excluded_ids:
+                continue
+            if not any(term in car_model_lower for term in dream_models):
+                continue
+            
+            raw_score = calculate_car_score(car, config, distance_weight=0.05)
+            value_rating = convert_score_to_value_rating(raw_score)
+            car.score = raw_score
+            car.value_rating = value_rating
+            
+            brand = car.make or 'Unknown'
+            if brand not in dream_by_brand:
+                dream_by_brand[brand] = []
+            dream_by_brand[brand].append(car)
+        
+        # Sort within each brand by distance (closest first)
+        for brand in dream_by_brand:
+            dream_by_brand[brand].sort(key=lambda c: c.distance_from_heerenveen_km or float('inf'))
     
     # Organize by fuel type for template
 
     # Get Heerenveen matches (lenient filtering)
     heerenveen_full_electric = get_heerenveen_matches(session, 'Full Electric', config, limit=3)
-    heerenveen_phev = get_heerenveen_matches(session, 'PHEV/Hybrid', config, limit=3)
+    heerenveen_phev = get_heerenveen_matches(session, 'PHEV', config, limit=3)
     
     # Organize Heerenveen matches by fuel type
     heerenveen_by_fuel = {}
     if heerenveen_full_electric:
         heerenveen_by_fuel['Full Electric'] = heerenveen_full_electric
     if heerenveen_phev:
-        heerenveen_by_fuel['PHEV/Hybrid'] = heerenveen_phev
+        heerenveen_by_fuel['PHEV'] = heerenveen_phev
     
     cars_by_fuel = {}
     if full_electric:
         cars_by_fuel['Full Electric'] = full_electric
     if phev:
-        cars_by_fuel['PHEV/Hybrid'] = phev
+        cars_by_fuel['PHEV'] = phev
     
     # Get critical features info for all top matches
     critical_features_info = {}
-    for car in full_electric + phev:
+    for car in full_electric + phev + [car for cars in dream_by_brand.values() for car in cars]:
         critical_features_info[car.id] = check_critical_features(car, config)
     
     # Get unique makes and models for filter dropdowns
-    available_makes = session.query(Car.make).filter(Car.is_available == True).distinct().order_by(Car.make).all()
+    available_makes = session.query(Car.make).filter(
+        Car.is_available == True,
+        Car.fuel_type.in_(TARGET_FUEL_TYPES)
+    ).distinct().order_by(Car.make).all()
     available_makes = [m[0] for m in available_makes if m[0]]
     
     available_models = []
     if make:
         available_models = session.query(Car.model).filter(
             Car.is_available == True,
+            Car.fuel_type.in_(TARGET_FUEL_TYPES),
             Car.make == make
         ).distinct().order_by(Car.model).all()
         available_models = [m[0] for m in available_models if m[0]]
@@ -2168,7 +2299,7 @@ def top_matches():
     # Build user_reqs object for the sidebar
     user_reqs = {
         'min_price': config.get('search_criteria', {}).get('min_price', 20000),
-        'max_price': config.get('search_criteria', {}).get('max_price', 35000),
+        'max_price': config.get('search_criteria', {}).get('max_price', 40000),
         'min_year': config.get('search_criteria', {}).get('min_year', 2022),
         'max_mileage_acceptable': config.get('search_criteria', {}).get('max_mileage_km', 100000)
     }
@@ -2189,6 +2320,13 @@ def top_matches():
         if len(cars) > 0:
             for i, car in enumerate(cars[:3]):  # Log first 3 cars per fuel type
                 logger.info(f"    [{i+1}] {car.make} {car.model} (ID: {car.id})")
+    if dream_by_brand:
+        total_dream = sum(len(cars) for cars in dream_by_brand.values())
+        logger.info(f"dream_by_brand: {total_dream} cars across {len(dream_by_brand)} brands")
+        for brand, cars in dream_by_brand.items():
+            logger.info(f"  [{brand}] {len(cars)} cars")
+            for i, car in enumerate(cars[:3]):
+                logger.info(f"    [{i+1}] {car.make} {car.model} (ID: {car.id})")
     logger.info("=" * 80)
     
     session.close()
@@ -2196,6 +2334,7 @@ def top_matches():
     
     return render_template('top_matches.html', 
                           cars_by_fuel=cars_by_fuel,
+                          dream_by_brand=dream_by_brand,
                           heerenveen_by_fuel=heerenveen_by_fuel,
                           critical_features_info=critical_features_info,
                           trade_in_value=TRADE_IN_VALUE,
@@ -2217,7 +2356,8 @@ def analytics():
         (15000, 20000),
         (20000, 25000),
         (25000, 30000),
-        (30000, 35000)
+        (30000, 35000),
+        (35000, 40000)
     ]
     
     # Preferred cars configuration from config.yaml
@@ -2322,7 +2462,10 @@ def analytics():
     fuel_types = session.query(
         Car.fuel_type,
         func.count(Car.id).label('count')
-    ).filter(Car.is_available == True).group_by(Car.fuel_type).all()
+    ).filter(
+        Car.is_available == True,
+        Car.fuel_type.in_(TARGET_FUEL_TYPES)
+    ).group_by(Car.fuel_type).all()
     
     fuel_type_stats = {}
     for fuel_type, count in fuel_types:
@@ -2331,34 +2474,16 @@ def analytics():
             Car.fuel_type == fuel_type
         ).scalar() or 0
         
-        # Handle PHEV/Hybrid grouping
         display_name = fuel_type
-        if fuel_type in ['PHEV', 'Hybrid']:
-            display_name = 'PHEV'
-            # Combine PHEV and Hybrid stats
-            if 'PHEV' not in fuel_type_stats:
-                combined_count = session.query(Car).filter(
-                    Car.is_available == True,
-                    Car.fuel_type.in_(['PHEV', 'Hybrid'])
-                ).count()
-                combined_avg = session.query(func.avg(Car.price)).filter(
-                    Car.is_available == True,
-                    Car.fuel_type.in_(['PHEV', 'Hybrid'])
-                ).scalar() or 0
-                fuel_type_stats['PHEV'] = {
-                    'count': combined_count,
-                    'avg_price': int(combined_avg)
-                }
-        else:
-            fuel_type_stats[display_name] = {
-                'count': count,
-                'avg_price': int(avg_price)
-            }
+        fuel_type_stats[display_name] = {
+            'count': count,
+            'avg_price': int(avg_price)
+        }
     
-    # PHEV/Hybrid price distribution with individual prices
+    # PHEV price distribution with individual prices
     phev_cars = session.query(Car).filter(
         Car.is_available == True,
-        Car.fuel_type.in_(['PHEV', 'Hybrid'])
+        Car.fuel_type == 'PHEV'
     ).order_by(Car.price.asc()).all()
     
     phev_price_data = []
@@ -2390,6 +2515,7 @@ def analytics():
     
     # Price trends (last 30 days) - optional, set to empty list for now
     price_trends = []
+    smart_learning = get_enhanced_smart_learning_insights(session)
     
     session.close()
     
@@ -2409,7 +2535,7 @@ def analytics():
                          phev_avg_price=phev_avg_price,
                          ev_price_data=ev_price_data,
                          ev_avg_price=ev_avg_price,
-                         smart_learning=get_enhanced_smart_learning_insights(session),
+                         smart_learning=smart_learning,
                          config=config)
 
 
@@ -2424,7 +2550,10 @@ def api_cars():
     fuel_type = request.args.get('fuel_type')
     only_complete = request.args.get('only_complete', type=bool, default=False)
     
-    query = session.query(Car).filter(Car.is_available == True)
+    query = session.query(Car).filter(
+        Car.is_available == True,
+        Car.fuel_type.in_(TARGET_FUEL_TYPES)
+    )
     
     if vehicle_type:
         query = query.filter(Car.vehicle_type == vehicle_type)
@@ -2483,7 +2612,10 @@ def api_cars_filter():
         sort_by = request.args.get("sort_by", "last_seen")
         
         # Build query (same logic as index function)
-        query = session.query(Car).filter(Car.is_available == True)
+        query = session.query(Car).filter(
+            Car.is_available == True,
+            Car.fuel_type.in_(TARGET_FUEL_TYPES)
+        )
         
         # Apply filters
         if vehicle_type:
@@ -2743,7 +2875,7 @@ def admin():
     interval_minutes = scheduler_config.get('interval_minutes', 5)
     
     # Get availability checker config
-    availability_config = config.get('availability_checker', {})
+    availability_config = get_availability_config()
     availability_enabled = availability_config.get('enabled', True)
     availability_interval = availability_config.get('check_interval_hours', 6)
     
@@ -2845,12 +2977,14 @@ def trigger_scrape():
                 from scrapers.autoscout24_scraper import AutoScout24Scraper
                 from scrapers.autotrack_scraper import AutotrackScraper
                 from scrapers.gaspedaal_scraper import GaspedaalScraper
+                from scrapers.abd_scraper import ABDScraper
                 
                 if scraper_name == 'all':
                     scrapers = [
                         AutoScout24Scraper(),
                         AutotrackScraper(),
-                        GaspedaalScraper()
+                        GaspedaalScraper(),
+                        ABDScraper()
                     ]
                 elif scraper_name == 'autoscout24':
                     scrapers = [AutoScout24Scraper()]
@@ -2858,6 +2992,8 @@ def trigger_scrape():
                     scrapers = [AutotrackScraper()]
                 elif scraper_name == 'gaspedaal':
                     scrapers = [GaspedaalScraper()]
+                elif scraper_name == 'abd':
+                    scrapers = [ABDScraper()]
                 else:
                     logger.error(f"Unknown scraper: {scraper_name}")
                     return
@@ -3151,9 +3287,10 @@ def add_exclusion():
         with open(config_path, 'w') as f:
             yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
         
-        # Reload config in app
+        # Reload config in app and helper cache
         global config
         config = config_data
+        reload_vehicle_classification()
         
         # Clean up any existing vehicles that match the new exclusion
         deleted_count = clean_excluded_vehicles_from_db()
@@ -3207,9 +3344,10 @@ def delete_exclusion(exclusion_id):
         with open(config_path, 'w') as f:
             yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
         
-        # Reload config in app
+        # Reload config in app and helper cache
         global config
         config = config_data
+        reload_vehicle_classification()
         
         # Note: No need to clean database when removing exclusions
         # (previously excluded vehicles should not be auto-added back)
@@ -3585,7 +3723,7 @@ def get_config():
     """Get current configuration including availability checker settings"""
     try:
         # Get availability checker config from memory
-        availability_config = config.get("availability_checker", {})
+        availability_config = get_availability_config()
         
         # Convert hours to minutes for the frontend
         check_interval_hours = availability_config.get("check_interval_hours", 0.25)  # Default 15 minutes
@@ -3644,14 +3782,16 @@ def update_availability_config():
             current_config = yaml.safe_load(f)
         
         # Update availability checker settings
-        if "availability_checker" not in current_config:
-            current_config["availability_checker"] = {}
+        if "availability_sync" not in current_config:
+            current_config["availability_sync"] = {}
+        if "availability_checker" not in current_config["availability_sync"]:
+            current_config["availability_sync"]["availability_checker"] = {}
         
         # Convert minutes to hours for storage (config uses hours)
         check_interval_hours = check_interval / 60.0
         
-        current_config["availability_checker"]["check_interval_hours"] = check_interval_hours
-        current_config["availability_checker"]["min_features_required"] = min_features
+        current_config["availability_sync"]["availability_checker"]["check_interval_hours"] = check_interval_hours
+        current_config["availability_sync"]["availability_checker"]["min_features_required"] = min_features
         
         # Write updated config back to file
         with open(config_path, "w") as f:
